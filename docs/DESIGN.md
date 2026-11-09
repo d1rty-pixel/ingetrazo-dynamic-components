@@ -139,7 +139,9 @@ Surface syntax is **SketchUp-compatible** (decision 2): leading `=`, `IF(a>1,b,c
 `Parent!LenX`, case-insensitive names, `CHOOSE`, `OPTIONINDEX`, `LOOKUP`, `ROUND` and
 the rest of the function set that real `.skp` dynamic components use **(function list
 and exact semantics from memory; collect from sample files and SketchUp's DC
-documentation before phase 0 is final)**. Compatibility is the largest part of the
+documentation before phase 0 is final)**. The functions collected so far from
+SketchUp's own dialog, with their status here, are in
+[sketchup-functions.md](sketchup-functions.md). Compatibility is the largest part of the
 evaluator's scope: the whitelist above is the *safety* rule, the SketchUp function
 set is the *feature* rule, and the parser must reject everything outside both.
 
