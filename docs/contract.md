@@ -38,6 +38,8 @@ class Formula:
     refs: frozenset[tuple[str, str]]        # (node, attr) it reads; node is
                                             #   "self", "parent" or a sibling part name
 
+FUNCTIONS: tuple[str, ...]                  # every callable function name, sorted
+
 def parse(source: str) -> Formula           # raises FormulaError (syntax, limits)
 def run(f: Formula, lookup, *, budget: int = 10_000) -> tuple[object, int]
     # evaluate() plus the steps used; a FormulaError carries `.steps`. Text
@@ -169,7 +171,8 @@ def apply(scene, group) -> Result
     # material, generated copies (added/removed as needed, sharing the part's
     # prototype mesh). Mutates; call inside DynamicCommand.
 def set_values(scene, group, values: dict[str, dict[str, object]]) -> Result
-    # Store overrides (coerced) then apply. Mutates; inside DynamicCommand.
+    # Store overrides (coerced) then apply; a value of None removes that
+    # override (back to the default). Mutates; inside DynamicCommand.
 def set_definition(scene, def_id, spec) -> None
     # Replace a spec and re-apply every instance. Mutates; inside DynamicCommand.
 def absorb_scale(scene, group) -> bool
@@ -180,6 +183,49 @@ def absorb_scale(scene, group) -> bool
 def absorbable_axes(scene, group) -> list[int]
     # The axes absorb_scale would take over; empty = it would do nothing, so
     # callers skip the undo step.
+def preview_scale(scene, group) -> bool
+    # While a tool previews a scale (nothing committed yet): lay the parts out
+    # for the size the root's xform scale stands for and cancel that scale in
+    # the written parts, so boards keep their thickness during the drag. Writes
+    # only placements (no overrides, no `last`, no undo step); the layout is a
+    # function of xform + stored state, so undo/redo stay consistent. True if a
+    # placement changed.
+def relayout(scene, group) -> bool
+    # Placements back to the stored state (after a preview was cancelled or its
+    # scale undone); no undo step. True if a placement changed.
+def loose_children(group) -> list
+    # Children of a dynamic root that are no part yet (moved in from outside).
+def add_parts(scene, group, only=None) -> list[str]
+    # Register loose_children (or just those in `only`) as parts: unique part
+    # name, rest xform and size, node in the definition. Mutates; inside
+    # DynamicCommand.
+def is_open(scene, group) -> bool
+    # The host has `group` (or something inside it) open for editing
+    # (scene.edit_group). Entering a container pushes its matrix down into its
+    # children and leaves it at identity (core.scene._bake_container_xform),
+    # and leaving does not undo that; while open, nothing is written.
+def settle(scene, group) -> bool
+    # After the host pushed the root's matrix down: read that matrix back from
+    # the parts (the one most parts agree on, against the stored layout) and
+    # pull it up into the root again; nothing moves in the world. No undo step
+    # (the push-down had none). True if it changed something.
+def present_parts(group) -> set[str]       # part names with geometry here
+def missing_parts(scene, group) -> list[str]
+    # Parts of the definition this instance has no group for (deleted here).
+def remove_parts(scene, group, names) -> None
+    # Drop those nodes from the definition; in other instances their groups
+    # become loose children (kept, no longer parts). Mutates; DynamicCommand.
+def dynamic_roots(scene) -> list            # every dynamic instance, any depth
+def holder(scene, group)                    # the dynamic root `group` sits in
+                                            # directly, else None
+def add_problem(scene, groups, root) -> str | None
+    # Why `groups` cannot be added to `root` (user-facing English), None when
+    # they can: root not dynamic, a group is the root or a part already, or the
+    # host's own rule (core.outliner.reparent_problem: cycle, component, locked).
+def add_to_component(viewport, groups, root, label=...) -> list[str]
+    # One undo step: the host's ReparentGroupsCommand (world placement kept)
+    # into `root`, then add_parts(only=groups). Returns the new part names;
+    # raises ValueError with add_problem's text.
 def bake(scene, group) -> None
     # Remove the dynamic records from the root and its parts (generated copies
     # become plain parts); geometry and placements stay as they are now.
@@ -198,27 +244,77 @@ def run(viewport, mutate, roots, label=...) -> None
 
 ## ui/
 
+One side-tray tab, top to bottom: header, Options, one fold section per node,
+Apply/Discard for definition edits. Lengths are shown and typed in the document's
+length unit (`core.units`, read-only use of the host); everything stored stays in
+metres.
+
 ```python
-class OptionsDialog(QDialog):               # ui/options.py
-    def __init__(self, app, group, parent=None)
-    # One row per editable attribute (spec.editable_attrs), widgets by type and
-    # access, errors from the last Result shown inline. Apply = binding.run(...
-    # set_values ...) = one undo step.
-
-class AttributesPanel(QWidget):             # ui/attributes.py
+class DynamicPanel(QWidget):                # ui/panel.py
     def __init__(self, app)
-    # Authoring: the selected dynamic instance's spec as a tree/table of nodes and
-    # attributes (name, label, type, value, formula, access); edits go through
-    # binding.run(... set_definition ...). refresh() on document change.
-```
+    # Header: the component's name, part count, "Bake" (binding.run(... bake ...)).
+    # Groups moved into the component that are no part yet: a note naming them
+    # and "Add as part" (binding.run(... add_parts ...), not while the attribute
+    # editor has unapplied changes). Parts deleted here: not shown, a note and
+    # "Remove from definition". Nothing selected while the host has a dynamic
+    # component open for editing: that component is shown, read-only, with a
+    # note to leave it first (is_open).
+    # Without a dynamic selection: a hint, and "Make Dynamic" for one plain
+    # component instance. refresh() on document change: rebuilds only when the
+    # selection, the definition or its structure changed, otherwise updates
+    # values in place (a field being typed in keeps its focus).
+    def refresh() -> None
+    def show_options() -> None              # unfold Options, scroll to the top
 
+class OptionsForm(QWidget):                 # ui/options.py
+    def __init__(self, app)
+    def show_group(group, spec, result) -> None
+    # One row per editable attribute (spec.editable_attrs, editor by type and
+    # access) and per `view` attribute (read-only text). A change applies at once:
+    # binding.run(... set_values ...) = one undo step. A reset button on an
+    # overridden value sets it to None. Errors from `result` shown under the row.
+
+class AddDialog(QDialog):                   # ui/add_dialog.py
+    def __init__(self, scene, groups, roots, parent=None)
+    # "Add “Group 1” to:" and a list of the dynamic components (name, part
+    # count, position) that add_problem accepts; chosen() -> root | None.
+
+class AttributesEditor(QWidget):            # ui/attributes.py
+    def __init__(self, app)
+    def show_group(group, spec, inst, present=None) -> None
+    # `present`: the part names this instance has groups for; other nodes are
+    # not shown (deleted here).
+    # Works on a copy of the definition. One fold section per node; each
+    # attribute is a row (label, formula, evaluated value, error) that opens an
+    # inline editor: label, type, default value, formula with an insert menu and
+    # completion of references and functions (live check and preview), who may
+    # see/edit it, min/max, options as a table. "Add property" offers the reserved
+    # attributes the node lacks and a custom attribute. Every finished edit (a
+    # field left, a choice made, an attribute added, renamed or removed) is
+    # applied at once: binding.run(... set_definition ...) = one undo step;
+    # typing only updates the preview. A formula that does not parse holds the
+    # copy back (dirty) until fixed; discard() drops it. A definition changed by
+    # anything else (undo, redo) replaces the copy and reopens the editor with
+    # fresh values; its own writes do not (focus stays where Tab put it).
+    dirty: bool
+```
 ## __init__.py
 
 ```python
 def setup(app):
-    # api_version check (2); add_panel(AttributesPanel); add_context_menu:
-    # "Make Dynamic" on a component instance, "Component Options…" and
-    # "Bake Dynamic Component" on a dynamic one; add_outliner_kind;
-    # on_document_changed -> absorb_scale for dynamic instances whose xform
-    # carries a scale (re-entrancy guarded).
+    # api_version check (2); add_panel(DynamicPanel); add_context_menu:
+    # "Make Dynamic" on a component instance, "Component Options…" (shows the
+    # panel, DynamicPanel.show_options) and "Bake Dynamic Component" on a
+    # dynamic one; on groups that are no part: "Add as Part of “X”" when they
+    # sit loose in dynamic root X, else "Add to Dynamic Component…" (a small
+    # modal, ui/add_dialog.py, lists dynamic_roots) — then the root is selected
+    # and the panel opens the new part; add_outliner_kind; on_document_changed -> panel.refresh() and
+    # absorb_scale for dynamic instances whose xform carries a scale, only when
+    # a command not seen before is on top of viewport.history.undo_stack (a
+    # tool's live preview commits nothing; re-entrancy guarded). Without a new
+    # command, a scaled instance gets preview_scale, and one whose scale went
+    # away again (cancel, undo) gets relayout; any other one gets settle and
+    # relayout (parts follow the definition; a matrix the host pushed down is
+    # pulled back). Instances open for editing are left alone. A changed
+    # placement bumps scene.version and asks the viewport to redraw.
 ```

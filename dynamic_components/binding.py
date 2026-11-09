@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import math
+import re
 import uuid
 
 from PySide6.QtGui import QMatrix4x4
@@ -144,7 +145,13 @@ def _resolve_material(scene, name):
 # ------------------------------------------------------------------ make
 
 def _unique_name(base, taken) -> str:
-    base = (base or "part").strip().lower() or "part"
+    # A part name is read in formulas (``Shelf_board!LenX``): letters, digits
+    # and _ only, starting with a letter — «Group 1» becomes ``group_1``.
+    base = re.sub(r"\W+", "_", (base or "").strip().lower()).strip("_")
+    if not base:
+        base = "part"
+    elif base[0].isdigit() or base[0] == "_":
+        base = "part_" + base
     if base in ("parent", "self"):
         base += "_part"
     name, n = base, 2
@@ -205,8 +212,9 @@ def _style(scene, g, p) -> None:
         g.material = paint
 
 
-def _write(scene, group, result, spec=None) -> None:
-    """Write a Result into the instance's children (no evaluation)."""
+def _write(scene, group, result, spec=None) -> list:
+    """Write a Result into the instance's children (no evaluation); returns
+    the children whose placement it set."""
     spec = spec if spec is not None else definition(scene, group)
     nodes = (spec or {}).get("nodes", {})
     existing: dict[tuple, Group] = {}
@@ -221,6 +229,7 @@ def _write(scene, group, result, spec=None) -> None:
         else:
             parts.append((name, child))
     rebuilt = list(others)
+    written = []
     for name, part in parts:
         rebuilt.append(part)
         placements = result.placements.get(name)
@@ -238,7 +247,9 @@ def _write(scene, group, result, spec=None) -> None:
                 rebuilt.append(target)
             target.xform = _compose(rest["xform"], rest["size"], p)
             _style(scene, target, p)
+            written.append(target)
     group.children = rebuilt
+    return written
 
 
 def apply(scene, group):
@@ -338,6 +349,314 @@ def absorb_scale(scene, group) -> bool:
                              + [0.0] + t + [1.0])
     apply(scene, group)
     return True
+
+
+# --------------------------------------------------------- live preview
+
+def _placements(group) -> list:
+    return [(c, list(c.xform.data()) if c.xform is not None else None, c.hidden)
+            for c in group.children or ()]
+
+
+def _moved(before, group) -> bool:
+    after = _placements(group)
+    if len(before) != len(after):
+        return True
+    for (c0, x0, h0), (c1, x1, h1) in zip(before, after):
+        if c0 is not c1 or h0 != h1 or (x0 is None) != (x1 is None):
+            return True
+        if x0 is not None and any(abs(a - b) > 1e-9 for a, b in zip(x0, x1)):
+            return True
+    return False
+
+
+def preview_scale(scene, group) -> bool:
+    axes = absorbable_axes(scene, group)
+    if not axes:
+        return False
+    spec = definition(scene, group)
+    rec = group.ext[KEY]
+    norms = [_norm(c) for c in _decompose(group.xform)[0]]
+    over = copy.deepcopy(rec.get("set") or {})
+    root = over.setdefault("", {})
+    last = (rec.get("last") or {}).get("", {})
+    rest = spec["nodes"][""].get("rest", {}).get("size", [0.0, 0.0, 0.0])
+    for j in axes:
+        attr = "len" + AXES[j]
+        root[attr] = float(root.get(attr, last.get(attr, rest[j]))) * norms[j]
+    result = _evaluate.evaluate(spec, over, rec.get("last"))
+    before = _placements(group)
+    cancel = QMatrix4x4()
+    cancel.scale(*[1.0 / norms[j] if j in axes else 1.0 for j in range(3)])
+    for target in _write(scene, group, result, spec):
+        target.xform = cancel * target.xform
+    return _moved(before, group)
+
+
+def relayout(scene, group) -> bool:
+    spec = definition(scene, group)
+    if spec is None:
+        return False
+    rec = group.ext[KEY]
+    result = _evaluate.evaluate(spec, copy.deepcopy(rec.get("set") or {}),
+                                rec.get("last"))
+    before = _placements(group)
+    _write(scene, group, result, spec)
+    return _moved(before, group)
+
+
+# ------------------------------------------------------------ new parts
+
+def loose_children(group) -> list:
+    if not is_dynamic(group):
+        return []
+    return [c for c in group.children or () if _part_name(c) is None]
+
+
+def add_parts(scene, group, only=None) -> list[str]:
+    spec = definition(scene, group)
+    if spec is None:
+        raise ValueError("Not a dynamic component, or its definition is missing.")
+    spec = copy.deepcopy(spec)
+    nodes = spec["nodes"]
+    taken = set(nodes)
+    added = []
+    loose = loose_children(group)
+    if only is not None:
+        loose = [c for c in loose if any(c is g for g in only)]
+    for child in loose:
+        if child.xform is None:
+            child.xform = QMatrix4x4()
+            child.component = False
+        name = _unique_name(child.name, taken)
+        taken.add(name)
+        child.ext = dict(child.ext or {})
+        child.ext[KEY] = {"part": name}
+        nodes[name] = {"label": child.name or name, "attrs": {},
+                       "rest": {"xform": [float(v) for v in child.xform.data()],
+                                "size": _size(child)}}
+        added.append(name)
+    if added:
+        _store_def(scene, group.ext[KEY]["def"], spec)
+    return added
+
+
+# ------------------------------------------------ host edit context
+
+def is_open(scene, group) -> bool:
+    g = getattr(scene, "edit_group", None)
+    if g is None:
+        return False
+    up = _parents(scene)
+    while g is not None:
+        if g is group:
+            return True
+        g = up.get(id(g))
+    return False
+
+
+def _close_matrix(a, b, tol=1e-6) -> bool:
+    return all(abs(x - y) <= tol * max(1.0, abs(x), abs(y))
+               for x, y in zip(a.data(), b.data()))
+
+
+def settle(scene, group) -> bool:
+    spec = definition(scene, group)
+    if spec is None or group.xform is None:
+        return False
+    rec = group.ext[KEY]
+    try:
+        result = _evaluate.evaluate(spec, copy.deepcopy(rec.get("set") or {}),
+                                    rec.get("last"))
+    except Exception:  # noqa: BLE001 - an unreadable spec settles nothing
+        return False
+    frames = []
+    for child in group.children or ():
+        name = _part_name(child)
+        if name is None or _is_copy(child) or child.xform is None:
+            continue
+        rest = spec["nodes"].get(name, {}).get("rest")
+        placements = result.placements.get(name)
+        if not rest or "xform" not in rest or not placements:
+            continue
+        expected = _compose(rest["xform"], rest["size"], placements[0])
+        inverse, ok = expected.inverted()
+        if ok:
+            frames.append(child.xform * inverse)
+    if not frames:
+        return False
+    best, votes = None, 0
+    for f in frames:
+        n = sum(1 for g in frames if _close_matrix(f, g))
+        if n > votes:
+            best, votes = f, n
+    if votes * 2 < len(frames) or _close_matrix(best, QMatrix4x4()):
+        return False
+    down, ok = best.inverted()
+    if not ok:
+        return False
+    group.xform = group.xform * best
+    for child in group.children or ():
+        child.xform = down * (child.xform if child.xform is not None else QMatrix4x4())
+    return True
+
+
+# --------------------------------------------------------- deleted parts
+
+def present_parts(group) -> set:
+    return {_part_name(c) for c in group.children or ()
+            if _part_name(c) is not None and not _is_copy(c)}
+
+
+def missing_parts(scene, group) -> list:
+    spec = definition(scene, group)
+    if spec is None:
+        return []
+    here = present_parts(group)
+    return [n for n in spec["nodes"] if n and n not in here]
+
+
+def remove_parts(scene, group, names) -> None:
+    spec = definition(scene, group)
+    if spec is None:
+        raise ValueError("Not a dynamic component, or its definition is missing.")
+    def_id = group.ext[KEY]["def"]
+    spec = copy.deepcopy(spec)
+    gone = {n for n in names if n}
+    for name in gone:
+        spec["nodes"].pop(name, None)
+    _store_def(scene, def_id, spec)
+    for inst in instances_of(scene, def_id):
+        kept = []
+        for child in inst.children or ():
+            name = _part_name(child)
+            if name in gone:
+                if _is_copy(child):
+                    continue                    # generated: goes with its part
+                child.ext = {k: v for k, v in (child.ext or {}).items()
+                             if k != KEY} or None
+            kept.append(child)
+        inst.children = kept
+        apply(scene, inst)
+
+
+def dynamic_roots(scene) -> list:
+    return [g for g in _walk(scene.groups) if is_dynamic(g)]
+
+
+def _parents(scene) -> dict:
+    up = {}
+    for g in _walk(scene.groups):
+        for c in g.children or ():
+            up[id(c)] = g
+    return up
+
+
+def holder(scene, group):
+    parent = _parents(scene).get(id(group))
+    return parent if parent is not None and is_dynamic(parent) else None
+
+
+def _shown(group) -> str:
+    return f"“{group.name or 'Group'}”"
+
+
+def add_problem(scene, groups, root):
+    if root is None or not is_dynamic(root) or definition(scene, root) is None:
+        return "That is not a dynamic component."
+    groups = list(groups)
+    if not groups:
+        return "Nothing to add."
+    up = _parents(scene)
+    for g in groups:
+        if g is root:
+            return "A component cannot be added to itself."
+        if is_dynamic(g):
+            return (f"{_shown(g)} is a dynamic component itself; nested dynamic "
+                    "components are not supported yet.")
+        if _part_name(g) is not None:
+            if up.get(id(g)) is root:
+                return f"{_shown(g)} is a part of this component already."
+            return (f"{_shown(g)} is a part of another dynamic component; "
+                    "components keep their parts.")
+        if getattr(g, "locked", False):
+            return f"{_shown(g)} is locked."
+        old = up.get(id(g))
+        if old is not None and old is not root:
+            from core import outliner
+            if outliner.in_component(scene.groups, old):
+                return (f"{_shown(g)} belongs to another component; components "
+                        "keep their parts.")
+    from core import outliner
+    # reparent_problem answers "component" for a component target before it
+    # looks at locks, so the target's lock is checked here.
+    if outliner.locked_on_path(scene.groups, root):
+        return "The component is locked."
+    problem = outliner.reparent_problem(scene.groups, groups, root)
+    if problem == "cycle":
+        return "The component sits inside what you want to add to it."
+    if problem == "locked":
+        return "The component is locked."
+    # "component": the target is a component. The host keeps a component's
+    # parts as they are; a dynamic one takes the group into its definition,
+    # which is what this does, so that rule does not apply here.
+    return None
+
+
+class AddToComponentCommand(Command):
+    """Move groups into a dynamic root without moving them in the world (the
+    host's own ReparentGroupsCommand, as the Browser's drag and drop) and make
+    them parts: one undo step."""
+
+    keeps_paint = False
+    keeps_groups = False
+
+    def __init__(self, groups, root, label="Add to dynamic component") -> None:
+        self.groups = list(groups)
+        self.root = root
+        self.label = label
+        self.reparent = None
+        self.added = []
+        self.dynamic = DynamicCommand(self._register, [root], label)
+        self.error = None
+
+    def _register(self, scene):
+        self.added = add_parts(scene, self.root, only=self.groups)
+
+    def do(self, scene) -> None:
+        from core import outliner
+        from core.history import ReparentGroupsCommand
+        if self.reparent is None:
+            moving = outliner.needs_moving(scene.groups, self.groups, self.root)
+            self.reparent = ReparentGroupsCommand(moving, self.root) if moving else False
+        if self.reparent:
+            self.reparent.do(scene)
+        try:
+            self.dynamic.do(scene)
+        except BaseException as exc:
+            if self.reparent:
+                self.reparent.undo(scene)
+            self.error = exc
+            raise
+
+    def undo(self, scene) -> None:
+        self.dynamic.undo(scene)
+        if self.reparent:
+            self.reparent.undo(scene)
+
+
+def add_to_component(viewport, groups, root, label="Add to dynamic component") -> list:
+    problem = add_problem(viewport.scene, groups, root)
+    if problem:
+        raise ValueError(problem)
+    cmd = AddToComponentCommand(groups, root, label)
+    viewport.history.execute(cmd)
+    if cmd.error is not None:
+        raise cmd.error
+    notify = getattr(viewport, "notify_scene_changed", None)
+    if callable(notify):
+        notify()
+    return list(cmd.added)
 
 
 def bake(scene, group) -> None:

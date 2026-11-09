@@ -93,6 +93,17 @@ def test_part_names_are_unique_lowercase(qtapp):
     assert [c.ext[KEY]["part"] for c in root.children] == ["leaf", "leaf_2"]
 
 
+def test_part_names_are_usable_in_formulas(qtapp):
+    scene = Scene()
+    root = Group(Mesh(), "R")
+    root.adopt([_part("Group 1", (1, 1, 1)), _part("2 Böden", (1, 1, 1)),
+                _part("  ", (1, 1, 1)), _part("Parent", (1, 1, 1))])
+    scene.groups.append(root)
+    binding.make_dynamic(scene, root)
+    assert [c.ext[KEY]["part"] for c in root.children] == [
+        "group_1", "part_2_böden", "part", "parent_part"]
+
+
 def test_make_dynamic_rejects_plain_group_and_twice(door):
     scene, root = door
     with pytest.raises(ValueError):
@@ -308,3 +319,18 @@ def test_set_values_and_definition_end_to_end(door):
     # The copy inherited width 1.8, so leaf = 3.6 m over a 0.9 m rest size.
     assert other.children[0].xform.data()[0] == pytest.approx(4.0)
     assert root.children[0].xform.data()[0] == pytest.approx(4.0)
+
+
+def test_settle_pulls_back_a_pushed_down_matrix_only(door):
+    scene, root = door
+    binding.make_dynamic(scene, root)
+    binding.apply(scene, root)
+    root.xform.translate(3.0, 1.0, 0.0)          # a plain move: nothing to settle
+    assert binding.settle(scene, root) is False
+    moved = QMatrix4x4(root.xform)
+    for child in root.children:                   # what entering the group does
+        child.xform = moved * child.xform
+    root.xform = QMatrix4x4()
+    assert binding.settle(scene, root) is True
+    assert list(root.xform.data()) == pytest.approx(list(moved.data()))
+    assert binding.settle(scene, root) is False

@@ -440,6 +440,9 @@ _FUNCS = {
 }
 _LAZY = {"IF": (2, 3), "CHOOSE": (2, MAX_ARGS)}
 
+#: Every function a formula may call, sorted (for pickers and completion).
+FUNCTIONS: tuple[str, ...] = tuple(sorted({*_FUNCS, *_LAZY}))
+
 
 # -------------------------------------------------------------- interpreter
 
