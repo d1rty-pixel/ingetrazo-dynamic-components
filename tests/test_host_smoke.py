@@ -216,6 +216,29 @@ def test_live_scale_preview_keeps_board_thickness_and_cancels_cleanly(win):
     assert len(hist.undo_stack) == steps
 
 
+def test_a_group_moved_into_the_component_can_become_a_part(win):
+    scene = win.viewport.scene
+    root = _component(scene)
+    binding.run(win.viewport, lambda s: binding.make_dynamic(s, root),
+                [root], "Make dynamic")
+    extra = _slab("Shelf board", (0.5, 0.3, 0.02), (0.1, 0, 0.4))
+    root.children = list(root.children) + [extra]
+    assert binding.loose_children(root) == [extra]
+    binding.run(win.viewport, lambda s: binding.add_parts(s, root), [root], "Add parts")
+    assert binding.loose_children(root) == []
+    node = binding.definition(scene, root)["nodes"]["shelf_board"]
+    assert node["label"] == "Shelf board"
+    assert node["rest"]["size"] == pytest.approx([0.5, 0.3, 0.02])
+    win.viewport.history.undo()
+    assert binding.loose_children(root) == [extra]
+    assert "shelf_board" not in binding.definition(scene, root)["nodes"]
+
+
+def _panel_of(win):
+    return next(w for w in QApplication.allWidgets()
+                if type(w).__name__ == "DynamicPanel" and w.window() is win)
+
+
 def _shelf_at(win, x):
     scene = win.viewport.scene
     side = _slab("Side", (0.02, 0.5, 1.0), (0.98, 0, 0))
@@ -244,10 +267,13 @@ def test_editing_inside_a_dynamic_component_and_leaving_moves_nothing(win):
     root, side = _shelf_at(win, 5.0)
     world = lambda: (root.xform * side.xform).map(V(0, 0, 0)).x()  # noqa: E731
     assert world() == pytest.approx(5.98)
+    panel = _panel_of(win)
     scene.begin_group_edit(root)            # the host pushes the matrix down
     win.viewport.notify_scene_changed()
     assert root.xform.column(3).x() == pytest.approx(0.0)
     assert world() == pytest.approx(5.98)   # left alone while open
+    assert panel.group is root and not panel.open_note.isHidden()
+    assert not panel.scroll.widget().isEnabled() and not panel.bake_button.isEnabled()
     scene.end_group_edit()
     win.viewport.notify_scene_changed()
     assert root.xform.column(3).x() == pytest.approx(5.0)   # pulled back up
@@ -256,3 +282,26 @@ def test_editing_inside_a_dynamic_component_and_leaving_moves_nothing(win):
                 lambda s: binding.set_values(s, root, {"": {"boards": 3}}),
                 [root], "Options")
     assert world() == pytest.approx(5.98)   # no jump to the origin
+
+
+def test_deleting_a_part_updates_the_sidebar(win):
+    scene = win.viewport.scene
+    root, side = _shelf_at(win, 2.0)
+    panel = _panel_of(win)
+    scene.selection.clear()
+    scene.selection.add(root)
+    win.viewport.notify_scene_changed()
+    assert set(panel.attributes._folds) == {"", "side", "board"}
+    assert panel.missing_box.isHidden()
+    root.children = [c for c in root.children if c is not side]   # deleted
+    win.viewport.notify_scene_changed()
+    assert set(panel.attributes._folds) == {"", "board"}
+    assert panel.subtitle.text() == "Dynamic component · 1 part"
+    assert not panel.missing_box.isHidden() and "“Side”" in panel.missing_label.text()
+    panel.missing_button.click()
+    assert "side" not in binding.definition(scene, root)["nodes"]
+    win.viewport.notify_scene_changed()
+    assert panel.missing_box.isHidden()
+    win.viewport.history.undo()
+    win.viewport.notify_scene_changed()
+    assert "side" in binding.definition(scene, root)["nodes"]

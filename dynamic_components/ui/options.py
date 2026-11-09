@@ -1,175 +1,215 @@
-"""Component Options dialog: the user-facing attributes of one dynamic instance."""
+"""Options: the user-facing attributes of the selected dynamic instance."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                               QDoubleSpinBox, QFormLayout, QLabel, QLineEdit,
-                               QSpinBox, QVBoxLayout, QWidget)
+import json
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QFormLayout, QHBoxLayout, QLabel, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from ..i18n import tr
-
-KEY = "dynamic_components"
-_BIG = 1.0e6
+from .common import (KEY, Lengths, ValueEditor, attr_label, error_label,
+                     muted, node_title, same_value, value_text)
 
 
 def _modules():
-    from .. import binding, evaluate, spec
-    return binding, evaluate, spec
+    from .. import binding, spec
+    return binding, spec
 
 
-class OptionsDialog(QDialog):
-    def __init__(self, app, group, parent=None):
+class _Row:
+    def __init__(self, node, name, attr, editor, view, reset, error):
+        self.node, self.name, self.attr = node, name, attr
+        self.editor, self.view, self.reset, self.error = editor, view, reset, error
+        self.shown = None                      # the value the field shows now
+
+
+class OptionsForm(QWidget):
+    """One row per attribute users may edit or see. A change is applied at once
+    (one undo step); the reset button drops the instance's own value."""
+
+    def __init__(self, app, parent=None):
         super().__init__(parent)
         self.app = app
-        self.group = group
-        self._rows = {}
-        self._errors = {}
-        self._layout = QVBoxLayout(self)
-        self._form_host = None
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        self.buttons = QDialogButtonBox()
-        self.apply_button = self.buttons.addButton(
-            tr("Apply"), QDialogButtonBox.ApplyRole)
-        self.close_button = self.buttons.addButton(
-            tr("Close"), QDialogButtonBox.RejectRole)
-        self.apply_button.clicked.connect(self.apply)
-        self.close_button.clicked.connect(self.close)
-        self._layout.addWidget(self.status)
-        self._layout.addWidget(self.buttons)
-        self._build()
+        self.group = None
+        self.status_text = ""
+        self._rows: dict[tuple, _Row] = {}
+        self._shape = None
+        self._lengths = Lengths()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._host = QWidget()
+        outer.addWidget(self._host)
+        self.empty = muted(QLabel(tr(
+            "No options for users yet. Open an attribute below and set "
+            "“Users can edit” to show it here.")))
+        self.empty.setWordWrap(True)
+        outer.addWidget(self.empty)
+        self.status = error_label()
+        outer.addWidget(self.status)
 
-    def _build(self):
-        binding, evaluate, spec = _modules()
-        definition = binding.definition(self.app.scene, self.group)
-        inst = self.group.ext.get(KEY, {})
-        self._set = inst.get("set", {})
-        self._last = inst.get("last") or {}
-        self.setWindowTitle(
-            tr("Component Options") + " — " + str(definition["name"]))
-        if not self._errors:
-            self._errors = self._evaluate_errors(evaluate, definition, inst)
-        if self._form_host is not None:
-            self._layout.removeWidget(self._form_host)
-            self._form_host.deleteLater()
-        host = QWidget()
-        form = QFormLayout(host)
-        self._rows = {}
-        for node, name, attr in spec.editable_attrs(definition):
-            self._add_row(form, definition, node, name, attr)
-        for node, name, attr in self._view_attrs(definition):
-            self._add_row(form, definition, node, name, attr)
-        self._form_host = host
-        self._layout.insertWidget(0, host)
-        self.apply_button.setEnabled(bool(self._rows))
+    # ------------------------------------------------------------ building
 
     @staticmethod
-    def _evaluate_errors(evaluate, definition, inst):
-        try:
-            return dict(evaluate.evaluate(
-                definition, inst.get("set", {}), inst.get("last")).errors)
-        except Exception:
-            return {}
-
-    @staticmethod
-    def _view_attrs(definition):
+    def _entries(spec_mod, definition):
+        entries = list(spec_mod.editable_attrs(definition))
         for node, body in definition["nodes"].items():
             for name, attr in body.get("attrs", {}).items():
                 if attr.get("access") == "view":
-                    yield node, name, attr
+                    entries.append((node, name, attr))
+        return entries
+
+    def _shape_of(self, definition, entries):
+        return json.dumps([[n, a, attr.get("label"), attr.get("type"),
+                            attr.get("access"), attr.get("options"),
+                            attr.get("min"), attr.get("max"),
+                            node_title(definition, n)]
+                           for n, a, attr in entries], default=str)
+
+    def show_group(self, group, definition, result=None) -> None:
+        _, spec_mod = _modules()
+        self.group = group
+        entries = self._entries(spec_mod, definition)
+        shape = self._shape_of(definition, entries)
+        if shape != self._shape or self._lengths_changed():
+            self._rebuild(definition, entries)
+            self._shape = shape
+        self._update(result)
+
+    def _lengths_changed(self) -> bool:
+        now = Lengths()
+        if (now.factor, now.suffix) != (self._lengths.factor, self._lengths.suffix):
+            self._lengths = now
+            return True
+        return False
+
+    def _rebuild(self, definition, entries):
+        old = self._host
+        self._host = QWidget()
+        form = QFormLayout(self._host)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.layout().replaceWidget(old, self._host)
+        old.deleteLater()
+        self._rows = {}
+        for node, name, attr in entries:
+            label = attr_label(name, attr)
+            if node:
+                label = f"{node_title(definition, node)}: {label}"
+            field = QWidget()
+            column = QVBoxLayout(field)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(1)
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            column.addLayout(line)
+            editor = view = reset = None
+            if attr.get("access") == "view":
+                view = QLabel()
+                view.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                line.addWidget(view, 1)
+            else:
+                editor = ValueEditor(
+                    attr.get("type"), attr.get("value"), self._lengths, name=name,
+                    options=attr.get("options"), minimum=attr.get("min"),
+                    maximum=attr.get("max"), as_list=attr.get("access") == "list")
+                line.addWidget(editor.widget, 1)
+                reset = QToolButton()
+                reset.setText("↺")
+                reset.setFocusPolicy(Qt.NoFocus)    # Tab goes field to field
+                reset.setAutoRaise(True)
+                reset.setToolTip(tr("Back to the component's default"))
+                line.addWidget(reset)
+                key = (node, name)
+                editor.changed.connect(lambda *_a, k=key: self._commit(k))
+                reset.clicked.connect(lambda _c=False, k=key: self._reset(k))
+            error = error_label()
+            column.addWidget(error)
+            caption = QLabel(label)
+            caption.setWordWrap(True)
+            form.addRow(caption, field)
+            self._rows[(node, name)] = _Row(node, name, attr, editor, view, reset, error)
+        self.empty.setVisible(not self._rows)
+
+    # ------------------------------------------------------------- values
 
     def _current(self, node, name, attr):
-        for source in (self._last, self._set):
+        inst = (self.group.ext or {}).get(KEY, {}) if self.group is not None else {}
+        for source in (inst.get("last") or {}, inst.get("set") or {}):
             if name in source.get(node, {}):
                 return source[node][name]
         return attr.get("value")
 
-    def _add_row(self, form, definition, node, name, attr):
-        value = self._current(node, name, attr)
-        label = attr.get("label") or name
-        if node:
-            part = definition["nodes"][node].get("label") or node
-            label = f"{part}: {label}"
-        if attr.get("access") == "view":
-            widget = QLabel("" if value is None else str(value))
-            read = None
-        else:
-            widget, read = self._editor(attr, value)
-        box = QWidget()
-        column = QVBoxLayout(box)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.addWidget(widget)
-        message = self._errors.get((node, name))
-        if message:
-            err = QLabel(message)
-            err.setWordWrap(True)
-            err.setStyleSheet("color: #c0392b;")
-            err.setObjectName("error")
-            column.addWidget(err)
-        form.addRow(label, box)
-        if read is not None:
-            self._rows[(node, name)] = (read, read())
+    def _overridden(self, node, name) -> bool:
+        inst = (self.group.ext or {}).get(KEY, {}) if self.group is not None else {}
+        return name in (inst.get("set") or {}).get(node, {})
 
-    def _editor(self, attr, value):
-        kind = attr.get("type")
-        if attr.get("access") == "list" or kind == "choice":
-            combo = QComboBox()
-            for text, data in attr.get("options") or []:
-                combo.addItem(str(text), data)
-            index = combo.findData(value)
-            if index < 0 and value is not None:
-                combo.addItem(str(value), value)
-                index = combo.count() - 1
-            combo.setCurrentIndex(max(index, 0))
-            return combo, combo.currentData
-        if kind in ("length", "float"):
-            spin = QDoubleSpinBox()
-            spin.setDecimals(3)
-            spin.setRange(attr["min"] if attr.get("min") is not None else -_BIG,
-                          attr["max"] if attr.get("max") is not None else _BIG)
-            if kind == "length":
-                spin.setSuffix(" m")
-            spin.setValue(float(value or 0.0))
-            return spin, spin.value
-        if kind == "int":
-            spin = QSpinBox()
-            spin.setRange(int(attr["min"]) if attr.get("min") is not None
-                          else -int(_BIG),
-                          int(attr["max"]) if attr.get("max") is not None
-                          else int(_BIG))
-            spin.setValue(int(value or 0))
-            return spin, spin.value
-        if kind == "bool":
-            check = QCheckBox()
-            check.setChecked(bool(value))
-            return check, check.isChecked
-        edit = QLineEdit("" if value is None else str(value))
-        return edit, edit.text
+    def _update(self, result) -> None:
+        errors = dict(getattr(result, "errors", None) or {})
+        for key, row in self._rows.items():
+            value = self._current(row.node, row.name, row.attr)
+            row.shown = value
+            if row.view is not None:
+                row.view.setText(value_text(row.attr.get("type"), value,
+                                            self._lengths, row.name))
+            elif row.editor.widget.hasFocus() and same_value(row.editor.read(), value):
+                pass                            # keep the cursor where it is
+            else:
+                row.editor.set(value)
+            if row.reset is not None:
+                row.reset.setVisible(self._overridden(row.node, row.name))
+            message = errors.get(key, "")
+            row.error.setText(message)
+            row.error.setVisible(bool(message))
+        self.status.setText(self.status_text)
+        self.status.setVisible(bool(self.status_text))
 
-    def changed_values(self):
+    def changed_values(self) -> dict:
         changed = {}
-        for (node, name), (read, initial) in self._rows.items():
-            now = read()
-            if now != initial:
+        for (node, name), row in self._rows.items():
+            if row.editor is None:
+                continue
+            now = row.editor.read()
+            if not same_value(now, row.shown):
                 changed.setdefault(node, {})[name] = now
         return changed
 
-    def apply(self):
-        binding = _modules()[0]
-        changed = self.changed_values()
-        if not changed:
-            return
+    def _run(self, values, label):
+        binding, _ = _modules()
+        group = self.group
         outcome = {}
 
         def mutate(scene):
-            outcome["result"] = binding.set_values(scene, self.group, changed)
+            outcome["result"] = binding.set_values(scene, group, values)
 
         try:
-            binding.run(self.app.viewport, mutate, [self.group],
-                        tr("Component options"))
-        except Exception as exc:
-            self.status.setText(str(exc))
-            return
-        self.status.clear()
+            binding.run(self.app.viewport, mutate, [group], label)
+        except Exception as exc:  # noqa: BLE001 - a Qt slot must not raise
+            self.status_text = str(exc)
+            self._update(None)
+            return None
+        self.status_text = ""
         result = outcome.get("result")
-        self._errors = dict(getattr(result, "errors", None) or {})
-        self._build()
+        self._update(result)
+        return result
+
+    def _commit(self, key) -> None:
+        row = self._rows.get(key)
+        if row is None or self.group is None:
+            return
+        now = row.editor.read()
+        if same_value(now, row.shown):
+            return
+        self._run({key[0]: {key[1]: now}}, tr("Component options"))
+
+    def _reset(self, key) -> None:
+        if self.group is None:
+            return
+        self._run({key[0]: {key[1]: None}}, tr("Reset component option"))
+
+    def apply(self) -> None:
+        """Apply every field that differs from the model (one undo step)."""
+        changed = self.changed_values()
+        if changed and self.group is not None:
+            self._run(changed, tr("Component options"))

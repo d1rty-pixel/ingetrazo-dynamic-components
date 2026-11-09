@@ -5,8 +5,6 @@ __version__ = "0.1.0"
 
 import logging
 
-from PySide6.QtCore import Qt
-
 from .i18n import tr
 
 KEY = "dynamic_components"
@@ -60,14 +58,13 @@ def _outliner_kind(binding, app):
 
 def setup(app):
     from . import binding
-    from .ui.attributes import AttributesPanel
-    from .ui.options import OptionsDialog
+    from .ui.panel import DynamicPanel
 
     if app.api_version != 2:
         raise RuntimeError("Requires IngeTrazo 0.6.0 / Extension API 2")
 
-    panel = AttributesPanel(app)
-    app.add_panel(tr("Dynamic Components"), panel, start_hidden=True)
+    panel = DynamicPanel(app)
+    dock = app.add_panel(tr("Dynamic Components"), panel, start_hidden=True)
 
     def run(label, fn, group):
         try:
@@ -79,30 +76,26 @@ def setup(app):
                 flash(f"{label}: {exc}", 5000)
 
     def open_options(group):
-        from PySide6.QtCore import QTimer
-
-        def show():
-            dialog = OptionsDialog(app, group, app.window)
-            dialog.setAttribute(Qt.WA_DeleteOnClose)
-            dialog.show()
-        QTimer.singleShot(0, show)
+        show = getattr(app, "show_panel", None)
+        if callable(show) and dock is not None:
+            show(dock)
+        panel.show_options()
 
     def context_menu(menu, selection):
         group = _single_instance(selection)
-        if group is None:
+        if group is not None and binding.is_dynamic(group):
+            menu.addAction(tr("Component Options…"),
+                           lambda: open_options(group))
+            menu.addAction(
+                tr("Bake Dynamic Component"),
+                lambda: run(tr("Bake dynamic component"),
+                            lambda s: binding.bake(s, group), group))
             return
-        if not binding.is_dynamic(group):
+        if group is not None:
             menu.addAction(
                 tr("Make Dynamic"),
                 lambda: run(tr("Make dynamic"),
                             lambda s: binding.make_dynamic(s, group), group))
-            return
-        menu.addAction(tr("Component Options…"),
-                       lambda: open_options(group))
-        menu.addAction(
-            tr("Bake Dynamic Component"),
-            lambda: run(tr("Bake dynamic component"),
-                        lambda s: binding.bake(s, group), group))
 
     app.add_context_menu(context_menu)
     app.add_outliner_kind(_outliner_kind(binding, app))

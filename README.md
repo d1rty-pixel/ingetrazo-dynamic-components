@@ -23,17 +23,40 @@ ln -s "$PWD/dynamic_components" ~/.local/share/ingetrazo/plugins/dynamic_compone
 
 ## Use
 
-Right-click a component instance: **Make Dynamic**, then **Component Options...**
-or **Bake Dynamic Component**. The **Dynamic Components** tab in the side tray
-(closed by default, see Window > Panels) edits attributes and formulas.
+Right-click a component instance: **Make Dynamic**. Everything else is in the
+**Dynamic Components** tab of the side tray (closed by default, see Window >
+Panels), for the selected instance:
+
+- **Options**: the values users may change; each change is one undo step, ↺ goes
+  back to the default. **Component Options…** in the context menu opens this.
+- **Bake** freezes the instance as it is now into a plain component.
+- One section per part: click an attribute to edit its label, type, formula
+  (insert menu and completion for references and functions, checked live), who
+  may see or edit it, limits and choices. A change is applied when you leave
+  the field (Tab moves on), for every instance of the definition; one undo step
+  each.
+
+Scaling an instance with the Scale tool lays its parts out live while you drag
+(boards keep their thickness) and stores the new size on release.
+
+A group cannot be made *inside* a component (IngeTrazo keeps a component's parts
+as they are); make it outside and move it in with the Browser. The tab then
+offers **Add as part**.
+
+While a dynamic component is open for editing (double-click into it), the tab
+shows it read-only; leave it to change options or attributes. A part deleted
+inside it disappears from the tab, which offers **Remove from definition**.
+Parts always follow the definition: a part moved by hand inside the component
+goes back to where its attributes put it.
 
 ## Status and known limits
 
 Implemented: SketchUp-style formulas (`=IF(…)`, `Parent!LenX`, `Part!Attr`),
 attributes on the component and its direct parts, `X/Y/Z`, `RotX/Y/Z`,
-`LenX/Y/Z`, `Hidden`, `Material`, `Copies`/`COPY`, Component Options dialog,
-attribute editor, scaling an instance feeds `LenX/Y/Z`, undo for every step,
-.igz round trip, bake.
+`LenX/Y/Z`, `Hidden`, `Material`, `Copies`/`COPY`, options and attribute editor
+in one side-tray tab, scaling an instance feeds `LenX/Y/Z` (live layout while
+dragging), adding moved-in groups as parts, undo for every step, .igz round
+trip, bake.
 
 Not yet, or unverified:
 
