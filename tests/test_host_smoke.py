@@ -234,6 +234,83 @@ def test_a_group_moved_into_the_component_can_become_a_part(win):
     assert "shelf_board" not in binding.definition(scene, root)["nodes"]
 
 
+def _dynamic_carcass(win):
+    scene = win.viewport.scene
+    root = Group(Mesh(), "Carcass")
+    root.adopt([_slab("Side", (0.02, 0.5, 1.0), (0, 0, 0))])
+    root.component = True
+    root.xform.translate(2.0, 0, 0)
+    scene.groups.append(root)
+    binding.run(win.viewport, lambda s: binding.make_dynamic(s, root), [root], "Make")
+    return root
+
+
+def test_add_a_group_to_a_dynamic_component_keeps_it_in_place(win):
+    from core.group import world_mesh
+    scene = win.viewport.scene
+    root = _dynamic_carcass(win)
+    shelf = _slab("Shelf board", (0.5, 0.3, 0.02), (2.1, 0.0, 0.4))
+    classic = Group(Mesh(), "Loose face")
+    classic.mesh.add_face([V(2.1, 0, 0.8), V(2.4, 0, 0.8), V(2.4, 0.3, 0.8)])
+    scene.groups.extend([shelf, classic])
+    before = [sorted((round(v.position.x(), 6), round(v.position.y(), 6),
+                      round(v.position.z(), 6)) for v in world_mesh(g).vertices)
+              for g in (shelf, classic)]
+    hist = win.viewport.history
+    steps = len(hist.undo_stack)
+    assert binding.add_problem(scene, [shelf, classic], root) is None
+    names = binding.add_to_component(win.viewport, [shelf, classic], root)
+    assert names == ["shelf_board", "loose_face"]
+    assert len(hist.undo_stack) == steps + 1
+    assert shelf not in scene.groups and shelf in root.children
+    assert binding.loose_children(root) == []
+    nodes = binding.definition(scene, root)["nodes"]
+    assert nodes["shelf_board"]["rest"]["size"] == pytest.approx([0.5, 0.3, 0.02])
+
+    def world(g):
+        m = root.xform * g.xform
+        return sorted((round(m.map(v.position).x(), 6), round(m.map(v.position).y(), 6),
+                       round(m.map(v.position).z(), 6)) for v in g.mesh.vertices)
+    assert [world(shelf), world(classic)] == before   # nothing moved in the world
+    hist.undo()
+    assert shelf in scene.groups and classic in scene.groups
+    assert shelf not in root.children
+    assert "shelf_board" not in binding.definition(scene, root)["nodes"]
+    hist.redo()
+    assert shelf in root.children and "shelf_board" in binding.definition(scene, root)["nodes"]
+
+
+def test_add_problems(win):
+    scene = win.viewport.scene
+    root = _dynamic_carcass(win)
+    other = _dynamic_carcass(win)
+    part = root.children[0]
+    assert "itself" in binding.add_problem(scene, [root], root)
+    assert "nested dynamic" in binding.add_problem(scene, [other], root)
+    assert "already" in binding.add_problem(scene, [part], root)
+    assert "another dynamic component" in binding.add_problem(scene, [part], other)
+    locked = _slab("Locked", (0.1, 0.1, 0.1), (0, 0, 0))
+    locked.locked = True
+    scene.groups.append(locked)
+    assert "locked" in binding.add_problem(scene, [locked], root)
+    assert "not a dynamic" in binding.add_problem(scene, [locked], locked)
+    with pytest.raises(ValueError):
+        binding.add_to_component(win.viewport, [part], root)
+
+
+def test_add_dialog_lists_only_components_that_accept(win):
+    from dynamic_components.ui.add_dialog import AddDialog
+    scene = win.viewport.scene
+    root = _dynamic_carcass(win)
+    other = _dynamic_carcass(win)
+    other.locked = True
+    loose = _slab("Board", (0.1, 0.1, 0.1), (0, 0, 0))
+    scene.groups.append(loose)
+    dialog = AddDialog(scene, [loose], binding.dynamic_roots(scene))
+    assert dialog.list.count() == 1 and dialog.chosen() is root
+    assert dialog.list.item(0).text() == "Carcass  ·  1 part"
+
+
 def _panel_of(win):
     return next(w for w in QApplication.allWidgets()
                 if type(w).__name__ == "DynamicPanel" and w.window() is win)

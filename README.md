@@ -40,8 +40,11 @@ Scaling an instance with the Scale tool lays its parts out live while you drag
 (boards keep their thickness) and stores the new size on release.
 
 A group cannot be made *inside* a component (IngeTrazo keeps a component's parts
-as they are); make it outside and move it in with the Browser. The tab then
-offers **Add as part**.
+as they are). Make it outside, right-click it and choose **Add to Dynamic
+Component…**: a small dialog lists the dynamic components that can take it, and
+the group keeps its place in the model (one undo step). A group already sitting
+in a dynamic component without being a part offers **Add as Part of “…”** in the
+context menu and **Add as part** in the tab.
 
 While a dynamic component is open for editing (double-click into it), the tab
 shows it read-only; leave it to change options or attributes. A part deleted

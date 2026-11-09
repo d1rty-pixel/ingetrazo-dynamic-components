@@ -134,3 +134,32 @@ def test_a_cancelled_preview_is_laid_out_again(qtapp, fakes):
     assert fakes.calls[-1] == ("relayout", group)
     hook()
     assert fakes.calls[-1] == ("relayout", group)      # only once
+
+
+def test_context_menu_adds_groups_to_a_dynamic_component(qtapp, fakes):
+    app = _setup(qtapp, fakes)
+    menu_fn = app.context_fns[0]
+
+    def entries(selection):
+        menu = Menu()
+        menu_fn(menu, selection)
+        return menu
+
+    root = FakeGroup(dynamic=True)
+    loose = FakeGroup(component=False)
+    loose.holder = root
+    menu = entries([loose])
+    assert list(menu.actions) == ["Add as Part of “Door”"]
+    menu.actions["Add as Part of “Door”"]()
+    assert ("add_to_component", [loose], root) in fakes.calls
+
+    outside = FakeGroup(component=False)
+    assert entries([outside]).actions == {}            # no dynamic component yet
+    app.scene.dynamic_roots = [root]
+    assert list(entries([outside]).actions) == ["Add to Dynamic Component…"]
+    plain = FakeGroup()
+    assert list(entries([plain]).actions) == ["Make Dynamic", "Add to Dynamic Component…"]
+    root.problem = "locked"
+    assert entries([outside]).actions == {}
+    assert list(entries([root]).actions) == ["Component Options…",
+                                             "Bake Dynamic Component"]

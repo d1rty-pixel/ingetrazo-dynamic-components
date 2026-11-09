@@ -81,6 +81,67 @@ def setup(app):
             show(dock)
         panel.show_options()
 
+    def addable(selection):
+        """The picked groups, when every pick is a group and none is a dynamic
+        component itself."""
+        picked = list(selection)
+        if not picked or not all(hasattr(g, "ext") and hasattr(g, "xform")
+                                 for g in picked):
+            return []
+        if any(binding.is_dynamic(g) for g in picked):
+            return []
+        return picked
+
+    def add_into(groups, root):
+        label = tr("Add to dynamic component")
+        try:
+            names = binding.add_to_component(app.viewport, groups, root, label)
+        except Exception as exc:  # noqa: BLE001 - a Qt slot must not raise
+            _log.warning("%s failed: %s", label, exc)
+            flash = getattr(app.viewport, "flash_status", None)
+            if callable(flash):
+                flash(f"{label}: {exc}", 5000)
+            return
+        selection = app.scene.selection
+        selection.clear()
+        selection.add(root)
+        notify = getattr(app.viewport, "notify_scene_changed", None)
+        if callable(notify):
+            notify()
+        show = getattr(app, "show_panel", None)
+        if callable(show) and dock is not None:
+            show(dock)
+        panel.reveal_parts(names)
+
+    def pick_and_add(groups):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QDialog
+        from .ui.add_dialog import AddDialog
+
+        def show():
+            dialog = AddDialog(app.scene, groups, binding.dynamic_roots(app.scene),
+                               app.window)
+            if dialog.exec() == QDialog.Accepted and dialog.chosen() is not None:
+                add_into(groups, dialog.chosen())
+        QTimer.singleShot(0, show)   # after the context menu has closed
+
+    def add_entries(menu, selection):
+        groups = addable(selection)
+        if not groups:
+            return
+        scene = app.scene
+        home = binding.holder(scene, groups[0])
+        if (home is not None and all(binding.holder(scene, g) is home for g in groups)
+                and not binding.add_problem(scene, groups, home)):
+            spec = binding.definition(scene, home) or {}
+            name = getattr(home, "name", None) or spec.get("name") or tr("Dynamic component")
+            menu.addAction(tr("Add as Part of “{name}”").replace("{name}", name),
+                           lambda: add_into(groups, home))
+        elif any(not binding.add_problem(scene, groups, r)
+                 for r in binding.dynamic_roots(scene)):
+            menu.addAction(tr("Add to Dynamic Component…"),
+                           lambda: pick_and_add(groups))
+
     def context_menu(menu, selection):
         group = _single_instance(selection)
         if group is not None and binding.is_dynamic(group):
@@ -96,6 +157,7 @@ def setup(app):
                 tr("Make Dynamic"),
                 lambda: run(tr("Make dynamic"),
                             lambda s: binding.make_dynamic(s, group), group))
+        add_entries(menu, selection)
 
     app.add_context_menu(context_menu)
     app.add_outliner_kind(_outliner_kind(binding, app))
