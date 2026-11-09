@@ -109,6 +109,30 @@ def setup(app):
 
     busy = []
     tried = {}
+    # Undo-stack commands already looked at. The Scale tool's live preview
+    # writes the scale into the xform on every mouse move (from the grip's
+    # original, never as a step from the last frame) and the viewport reports
+    # each frame as a document change. Absorbing there turned every frame into
+    # an undo step and multiplied LenX/Y/Z frame after frame. Only a scale
+    # that arrived with a NEW command (the tool's commit, a typed value, an
+    # undo/redo lands on a command we have seen) is absorbed.
+    handled = []
+
+    def _top_command():
+        stack = getattr(getattr(app.viewport, "history", None), "undo_stack", None)
+        return stack[-1] if stack else None
+
+    def _mark_handled(cmd):
+        if cmd is not None and not any(cmd is c for c in handled):
+            handled.append(cmd)
+            del handled[:-64]
+
+    def committed_since_last_look():
+        top = _top_command()
+        if top is None or any(top is c for c in handled):
+            return False
+        _mark_handled(top)
+        return True
 
     def candidates():
         scene = app.scene
@@ -118,23 +142,71 @@ def setup(app):
                 seen.add(id(group))
                 yield group
 
+    # Instances laid out for a scale that is only previewed: their parts must
+    # go back to the stored layout when that scale goes away (Esc, undo).
+    previewed = {}
+
+    def redraw():
+        app.scene.version += 1
+        update = getattr(app.viewport, "update", None)
+        if callable(update):
+            update()
+
+    def quietly(fn, group):
+        """A placement-only write outside the undo stack; never raises."""
+        try:
+            return fn(app.scene, group)
+        except Exception as exc:  # noqa: BLE001 - a redraw hook must not raise
+            _log.warning("Dynamic component preview failed: %s", exc)
+            return False
+
     def on_document_changed():
         if busy:
             return
         busy.append(True)
         try:
             panel.refresh()
+            committed = committed_since_last_look()
+            moved = False
+            seen = set()
             for group in candidates():
-                if not binding.is_dynamic(group) or not _has_scale(group.xform):
+                if not binding.is_dynamic(group):
                     continue
-                if not binding.absorbable_axes(app.scene, group):
+                seen.add(id(group))
+                if binding.is_open(app.scene, group):
+                    # The host edits inside it in world coordinates (it
+                    # pushed the matrix down); settled once it is left.
                     continue
-                key = _scale_key(group.xform)
-                if tried.get(id(group)) == key:
-                    continue
-                tried[id(group)] = key
-                run(tr("Dynamic component scale"),
-                    lambda s, g=group: binding.absorb_scale(s, g), group)
+                scaled = (_has_scale(group.xform)
+                          and binding.absorbable_axes(app.scene, group))
+                if scaled and committed:
+                    key = _scale_key(group.xform)
+                    if tried.get(id(group)) == key:
+                        continue
+                    tried[id(group)] = key
+                    previewed.pop(id(group), None)
+                    run(tr("Dynamic component scale"),
+                        lambda s, g=group: binding.absorb_scale(s, g), group)
+                    # Our own step: the next look must not count it as new work.
+                    _mark_handled(_top_command())
+                elif scaled:
+                    # A tool's live preview: keep boards their thickness while
+                    # dragging; nothing is stored, no undo step.
+                    previewed[id(group)] = group
+                    moved |= bool(quietly(binding.preview_scale, group))
+                elif id(group) in previewed:
+                    del previewed[id(group)]
+                    moved |= bool(quietly(binding.relayout, group))
+                else:
+                    # After an edit inside it the host leaves the matrix in
+                    # the parts: pull it back up. Then the parts follow the
+                    # definition again (a deleted part's undo, a stray move).
+                    moved |= bool(quietly(binding.settle, group))
+                    moved |= bool(quietly(binding.relayout, group))
+            for key in [k for k in previewed if k not in seen]:
+                del previewed[key]
+            if moved:
+                redraw()
         finally:
             busy.pop()
 

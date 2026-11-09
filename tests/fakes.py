@@ -64,16 +64,37 @@ def fake_modules(spec=SPEC):
     binding.bake = lambda s, g: calls.append(("bake", g))
     binding.absorb_scale = lambda s, g: calls.append(("absorb", g)) or True
     binding.absorbable_axes = lambda s, g: [0]
+    binding.preview_scale = lambda s, g: calls.append(("preview", g)) or True
+    binding.relayout = lambda s, g: calls.append(("relayout", g)) or False
+    binding.loose_children = lambda g: list(getattr(g, "loose", []))
+    binding.add_parts = lambda s, g: calls.append(("add_parts", g)) or ["new"]
+    binding.holder = lambda s, g: getattr(g, "holder", None)
+    binding.is_open = lambda s, g: getattr(g, "open", False)
+    binding.settle = lambda s, g: False
+    binding.present_parts = lambda g: set(getattr(g, "present", {"leaf"}))
+    binding.missing_parts = lambda s, g: list(getattr(g, "missing", []))
+    binding.remove_parts = lambda s, g, names: calls.append(("remove_parts", g, list(names)))
+    binding.dynamic_roots = lambda s: list(getattr(s, "dynamic_roots", []))
+    binding.add_problem = lambda s, gs, r: getattr(r, "problem", None)
+
+    def add_to_component(viewport, groups, root, label=""):
+        calls.append(("add_to_component", list(groups), root))
+        return ["new"]
+    binding.add_to_component = add_to_component
 
     def run(viewport, mutate, roots, label="Dynamic component"):
         calls.append(("run", label))
         mutate(viewport.scene)
+        history = getattr(viewport, "history", None)
+        if history is not None:
+            history.undo_stack.append(("command", label))
     binding.run = run
 
     spec_mod = types.ModuleType("spec")
     spec_mod.SpecError = FakeSpecError
     spec_mod.editable_attrs = lambda s: editable
     spec_mod.normalize = lambda s: s
+    spec_mod.coerce = lambda attr, value: value
 
     formula = types.ModuleType("formula")
     formula.FormulaError = FakeFormulaError
@@ -82,6 +103,7 @@ def fake_modules(spec=SPEC):
         if "(" in source and ")" not in source:
             raise FakeFormulaError("unbalanced")
     formula.parse = parse
+    formula.FUNCTIONS = ("IF", "MAX", "MIN")
 
     evaluate = types.ModuleType("evaluate")
     evaluate.evaluate = lambda s, o, last=None: SimpleNamespace(errors={})
@@ -115,8 +137,10 @@ class FakeApp:
     def __init__(self):
         self.groups = []
         self.selection = set()
-        self.scene = SimpleNamespace(groups=self.groups, selection=self.selection)
-        self.viewport = SimpleNamespace(scene=self.scene)
+        self.scene = SimpleNamespace(groups=self.groups, selection=self.selection,
+                                     version=0)
+        self.viewport = SimpleNamespace(scene=self.scene,
+                                        history=SimpleNamespace(undo_stack=[]))
         self.window = None
         self.panels = []
         self.context_fns = []

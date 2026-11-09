@@ -84,7 +84,53 @@ def test_document_hook_absorbs_scale_once_without_reentrancy(qtapp, fakes):
         original(viewport, mutate, roots, label)
         hook()
     fakes.run = run
+    app.viewport.history.undo_stack.append("scale committed")
     hook()
     assert [c for c in fakes.calls if c[0] == "absorb"] == [("absorb", group)]
     hook()
     assert len([c for c in fakes.calls if c[0] == "absorb"]) == 1
+
+
+def test_document_hook_previews_a_live_scale_and_absorbs_on_commit(qtapp, fakes):
+    """The Scale tool previews by writing the xform on every mouse move; the
+    viewport reports each frame as a change but no command is committed. Each
+    frame is laid out live (no undo step); the commit is absorbed once."""
+    app = _setup(qtapp, fakes)
+    hook = app.document_hooks[0]
+    stack = app.viewport.history.undo_stack
+    stack.append("an earlier edit")
+    hook()
+    group = FakeGroup(dynamic=True, xform=QMatrix4x4())
+    app.groups.append(group)
+    version = app.scene.version
+    for factor in (1.1, 1.3, 0.8, 1.5):
+        group.xform = QMatrix4x4()
+        group.xform.scale(1.0, 1.0, factor)
+        hook()
+    assert [c for c in fakes.calls if c[0] in ("absorb", "run")] == []
+    assert [c for c in fakes.calls if c[0] == "preview"] == [("preview", group)] * 4
+    assert app.scene.version == version + 4          # each frame redrawn
+    stack.append("scale committed")
+    hook()
+    assert [c for c in fakes.calls if c[0] == "absorb"] == [("absorb", group)]
+    # Undo brings back a command already seen: no second absorption.
+    stack.pop()
+    stack.pop()
+    hook()
+    assert len([c for c in fakes.calls if c[0] == "absorb"]) == 1
+
+
+def test_a_cancelled_preview_is_laid_out_again(qtapp, fakes):
+    app = _setup(qtapp, fakes)
+    hook = app.document_hooks[0]
+    app.viewport.history.undo_stack.append("an earlier edit")
+    hook()
+    group = FakeGroup(dynamic=True, xform=QMatrix4x4())
+    app.groups.append(group)
+    group.xform.scale(2.0, 1.0, 1.0)
+    hook()
+    group.xform = QMatrix4x4()                         # Esc: the tool reverts
+    hook()
+    assert fakes.calls[-1] == ("relayout", group)
+    hook()
+    assert fakes.calls[-1] == ("relayout", group)      # only once
