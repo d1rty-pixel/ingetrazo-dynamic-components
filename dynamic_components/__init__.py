@@ -5,7 +5,7 @@ __version__ = "0.1.0"
 
 import logging
 
-from .i18n import tr
+from .i18n import tr, tr_error
 
 KEY = "dynamic_components"
 _log = logging.getLogger(__name__)
@@ -68,12 +68,14 @@ def setup(app):
 
     def run(label, fn, group):
         try:
-            binding.run(app.viewport, fn, [group], label)
+            binding.run(app.viewport, fn, [group] if group is not None else [], label)
         except Exception as exc:  # noqa: BLE001 - a Qt slot must not raise
             _log.warning("%s failed: %s", label, exc)
             flash = getattr(app.viewport, "flash_status", None)
             if callable(flash):
-                flash(f"{label}: {exc}", 5000)
+                flash(f"{label}: {tr_error(exc)}", 5000)
+            return False
+        return True
 
     def open_options(group):
         show = getattr(app, "show_panel", None)
@@ -100,7 +102,7 @@ def setup(app):
             _log.warning("%s failed: %s", label, exc)
             flash = getattr(app.viewport, "flash_status", None)
             if callable(flash):
-                flash(f"{label}: {exc}", 5000)
+                flash(f"{label}: {tr_error(exc)}", 5000)
             return
         selection = app.scene.selection
         selection.clear()
@@ -160,6 +162,7 @@ def setup(app):
         add_entries(menu, selection)
 
     app.add_context_menu(context_menu)
+
     app.add_outliner_kind(_outliner_kind(binding, app))
 
     busy = []

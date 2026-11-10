@@ -382,3 +382,40 @@ def test_deleting_a_part_updates_the_sidebar(win):
     win.viewport.history.undo()
     win.viewport.notify_scene_changed()
     assert "side" in binding.definition(scene, root)["nodes"]
+
+
+def _insert_cabinet(win, lang):
+    """The reference cabinet, built by its script, into the window's document."""
+    from cabinet_builder import build
+    scene = win.viewport.scene
+    made = []
+    binding.run(win.viewport, lambda s: made.append(build.insert_cabinet(s, lang=lang)),
+                [], "Insert cabinet")
+    scene.selection.clear()
+    scene.selection.add(made[0])
+    win.viewport.notify_scene_changed()
+    return made[0]
+
+
+def test_the_panel_speaks_german(win):
+    """The extension follows the host's language (the host loads it under a
+    module name of its own, so only the host setting reaches it)."""
+    from core import i18n as host_i18n
+    from dynamic_components.ui.panel import DynamicPanel
+    previous = host_i18n.current_language()
+    host_i18n.set_language("de")
+    try:
+        _insert_cabinet(win, "de")
+        panel = DynamicPanel(_app_for(win))
+        assert panel.bake_button.text() == "Einfrieren"
+        assert set(panel.options._headers) == {"Korpus", "Sockel", "Fachböden", "Trennwände",
+                                               "Bohrungen (System 32)"}
+        assert panel.title.text() == "Schrank"
+    finally:
+        host_i18n.set_language(previous)
+
+
+def _app_for(win):
+    from types import SimpleNamespace
+    return SimpleNamespace(scene=win.viewport.scene, viewport=win.viewport,
+                           key=binding.KEY, window=win)

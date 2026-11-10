@@ -1,10 +1,11 @@
 """Evaluate a dynamic-component spec into values and part placements."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import formula as fm
 from . import spec as sp
+from .messages import Msg, text_of
 
 # Formulas of all attributes and copies together may not exceed this many steps.
 TOTAL_BUDGET = 1_000_000
@@ -36,6 +37,7 @@ class Result:
     values: dict[str, dict[str, object]]
     placements: dict[str, list[Placement]]
     errors: dict[tuple[str, str], str]
+    visible: dict[tuple[str, str], bool] = field(default_factory=dict)
 
 
 def evaluate(spec: dict, overrides: dict[str, dict[str, object]],
@@ -149,7 +151,7 @@ class _Engine:
             try:
                 self.over[key] = sp.coerce(attr, raw[key[1]])
             except sp.SpecError as exc:
-                self.errors[key] = f"Ignored invalid stored value: {exc}"
+                self.errors[key] = Msg("Ignored invalid stored value: {error}", error=text_of(exc))
 
     def _parse_formulas(self) -> None:
         for key, attr in self.attrs.items():
@@ -158,7 +160,7 @@ class _Engine:
             try:
                 self.formulas[key] = fm.parse(attr["formula"])
             except fm.FormulaError as exc:
-                self.errors[key] = str(exc)
+                self.errors[key] = text_of(exc)
                 self.vals[key] = self._fallback(key)
 
     # -- values
@@ -184,11 +186,11 @@ class _Engine:
             return current
         if token == "parent":
             if current == "":
-                raise fm.FormulaError("The component itself has no parent")
+                raise fm.FormulaError(Msg("The component itself has no parent"))
             return ""
         if token and token in self.nodes:
             return token
-        raise fm.FormulaError(f"Unknown part {token!r}")
+        raise fm.FormulaError(Msg("Unknown part {part}", part=repr(token)))
 
     def _lookup(self, current: str, token: str, attr: str, ctx: _Ctx):
         target = self._resolve(token, current)
@@ -197,17 +199,17 @@ class _Engine:
         key = (target, attr)
         if key not in self.attrs:
             shown = attr if token == "self" else f"{token}!{attr}"
-            raise fm.FormulaError(f"Unknown attribute {shown!r}")
+            raise fm.FormulaError(Msg("Unknown attribute {attr}", attr=repr(shown)))
         if target == ctx.node and key in ctx.vals:
             return ctx.vals[key]
         if key not in self.vals:
-            raise fm.FormulaError(f"Attribute {attr!r} is not available")
+            raise fm.FormulaError(Msg("Attribute {attr} is not available", attr=repr(attr)))
         return self.vals[key]
 
     def _compute(self, key, ctx: _Ctx):
         attr = self.attrs[key]
         if self.budget_left <= 0:
-            raise fm.FormulaError("Total evaluation budget exceeded")
+            raise fm.FormulaError(Msg("Total evaluation budget exceeded"))
 
         def lookup(token, name):
             return self._lookup(key[0], token, name, ctx)
@@ -224,11 +226,12 @@ class _Engine:
     @staticmethod
     def _coerce_result(attr, value):
         if isinstance(value, str) and attr["type"] in _NUMERIC_OR_BOOL:
-            raise fm.FormulaError(f"Text result {value[:30]!r} cannot be used as {attr['type']}")
+            raise fm.FormulaError(Msg("Text result {value} cannot be used as {type}",
+                                      value=repr(value[:30]), type=attr["type"]))
         try:
             return sp.coerce(attr, value)
         except sp.SpecError as exc:
-            raise fm.FormulaError(str(exc)) from None
+            raise fm.FormulaError(exc.msg) from None
 
     # -- graph
 
@@ -253,7 +256,7 @@ class _Engine:
             if len(comp) > 1 or comp[0] in self.deps[comp[0]]:
                 for key in comp:
                     self.cyclic.add(key)
-                    self.errors[key] = "Circular reference between attributes"
+                    self.errors[key] = Msg("Circular reference between attributes")
                     self.vals[key] = self._fallback(key)
                 continue
             key = comp[0]
@@ -261,7 +264,7 @@ class _Engine:
             try:
                 self.vals[key] = self._compute(key, ctx)
             except fm.FormulaError as exc:
-                self.errors[key] = str(exc)
+                self.errors[key] = text_of(exc)
                 self.vals[key] = self._fallback(key)
 
     # -- copies
@@ -290,7 +293,8 @@ class _Engine:
         count = max(0, min(int(raw), self.max_copies))
         if count != raw:
             self.errors.setdefault(
-                (part, "copies"), f"Copies limited to 0..{self.max_copies} (got {raw})")
+                (part, "copies"), Msg("Copies limited to 0..{limit} (got {got})",
+                                      limit=self.max_copies, got=raw))
         return count
 
     def _placement(self, part: str, index: int, vals: dict) -> Placement:
@@ -314,7 +318,8 @@ class _Engine:
             ctx.vals[key] = self._compute(key, ctx)
         except fm.FormulaError as exc:
             ctx.vals[key] = self._fallback(key)
-            self.errors.setdefault(key, f"Copy {ctx.index}: {exc}")
+            self.errors.setdefault(key, Msg("Copy {index}: {error}", index=ctx.index,
+                                            error=text_of(exc)))
 
     # -- driver
 
@@ -327,4 +332,33 @@ class _Engine:
         values: dict[str, dict[str, object]] = {node: {} for node in self.nodes}
         for (node, name), value in self.vals.items():
             values[node][name] = value
-        return Result(values, placements, self.errors)
+        return Result(values, placements, self.errors, self._visibility())
+
+    # -- options layout
+
+    def _visibility(self) -> dict:
+        """show_if of every attribute that has one; a failing one shows the
+        row (fail open) and reports why."""
+        visible = {}
+        for key, attr in self.attrs.items():
+            source = attr.get("show_if")
+            if not source:
+                continue
+            try:
+                parsed = fm.parse(source)
+                ctx = _Ctx()
+
+                def lookup(token, name, _node=key[0]):
+                    return self._lookup(_node, token, name, ctx)
+
+                budget = min(fm.DEFAULT_BUDGET, max(self.budget_left, 0))
+                if budget <= 0:
+                    raise fm.FormulaError(Msg("Total evaluation budget exceeded"))
+                value, used = fm.run(parsed, lookup, budget=budget)
+                self.budget_left -= used
+                visible[key] = bool(sp.coerce({"type": "bool"}, value))
+            except (fm.FormulaError, sp.SpecError) as exc:
+                self.budget_left -= getattr(exc, "steps", 0)
+                visible[key] = True
+                self.errors.setdefault(key, Msg("Show if: {error}", error=text_of(exc)))
+        return visible

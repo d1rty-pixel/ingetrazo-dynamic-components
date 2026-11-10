@@ -1,0 +1,3 @@
+{
+  "_comment": "English is the source language: keys ARE the English strings, so this identity map stays empty. It is also the fallback: a language without a catalog, or a string missing from one, shows the English text."
+}

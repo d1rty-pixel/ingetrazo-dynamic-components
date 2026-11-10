@@ -8,30 +8,32 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
                                QLabel, QLineEdit, QSizePolicy, QSpinBox,
                                QToolButton, QVBoxLayout, QWidget)
 
-from ..i18n import tr
+from ..i18n import N_, tr
 
 KEY = "dynamic_components"
 BIG = 1.0e6
 
 # Reserved attributes in the order a user thinks of them, with readable labels.
 RESERVED_LABELS = {
-    "lenx": "Size X", "leny": "Size Y", "lenz": "Size Z",
-    "x": "Position X", "y": "Position Y", "z": "Position Z",
-    "rotx": "Rotation X", "roty": "Rotation Y", "rotz": "Rotation Z",
-    "hidden": "Hidden", "material": "Material", "copies": "Copies",
+    "lenx": N_("Size X"), "leny": N_("Size Y"), "lenz": N_("Size Z"),
+    "x": N_("Position X"), "y": N_("Position Y"), "z": N_("Position Z"),
+    "rotx": N_("Rotation X"), "roty": N_("Rotation Y"), "rotz": N_("Rotation Z"),
+    "hidden": N_("Hidden"), "material": N_("Material"), "copies": N_("Copies"),
 }
 ROOT_RESERVED = ("lenx", "leny", "lenz")
 TYPE_LABELS = {
-    "length": "Length", "float": "Number", "int": "Whole number",
-    "bool": "Yes / No", "string": "Text", "choice": "Choice",
-    "material": "Material",
+    "length": N_("Length"), "float": N_("Number"), "int": N_("Whole number"),
+    "bool": N_("Yes / No"), "string": N_("Text"), "choice": N_("Choice"),
+    "material": N_("Material"),
 }
 ACCESS_LABELS = {
-    "none": "Hidden from users",
-    "view": "Shown, read-only",
-    "textbox": "Users can edit",
-    "list": "Users pick from a list",
+    "none": N_("Hidden from users"),
+    "view": N_("Shown, read-only"),
+    "textbox": N_("Users can edit"),
+    "list": N_("Users pick from a list"),
+    "warn": N_("Shown as a warning"),
 }
+GENERATOR_LABELS = {"board@1": N_("Board with holes, pockets and grooves")}
 _ANGLES = frozenset({"rotx", "roty", "rotz"})
 # Spin-box decimals per document unit: about 0.1-1 mm per step (as Newton).
 _DECIMALS = {"m": 3, "cm": 2, "mm": 1, "in": 2, "in-frac": 2, "ft": 3,
@@ -326,6 +328,15 @@ def muted(label: QLabel, *, small=False, mono=False) -> QLabel:
     if mono:
         parts.append("font-family: monospace;")
     label.setStyleSheet(" ".join(parts))
+    return label
+
+
+def warning_label(text: str = "") -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setTextFormat(Qt.PlainText)
+    label.setObjectName("warning")
+    label.setStyleSheet("color: #b9770e;")
     return label
 
 

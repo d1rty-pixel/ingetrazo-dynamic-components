@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Context, Decimal
 
+from .messages import MessageError, Msg, N_
+
 MAX_SOURCE = 4096
 MAX_DEPTH = 64
 MAX_ARGS = 64
@@ -17,8 +19,9 @@ MAX_STRING = 64 * 1024
 DEFAULT_BUDGET = 10_000
 
 
-class FormulaError(Exception):
-    """User-facing English error; `steps` is the work done before it was raised."""
+class FormulaError(MessageError):
+    """User-facing error (``.msg`` is a translatable Msg); `steps` is the work
+    done before it was raised."""
 
     steps = 0
 
@@ -49,7 +52,8 @@ def _tokenize(text: str) -> list[tuple[str, str, int]]:
     while pos < len(text):
         m = _TOKEN_RE.match(text, pos)
         if m is None:
-            raise FormulaError(f"Unexpected character {text[pos]!r} at position {pos + 1}")
+            raise FormulaError(Msg("Unexpected character {char} at position {pos}",
+                                   char=repr(text[pos]), pos=pos + 1))
         if m.lastgroup != "ws":
             tokens.append((m.lastgroup, m.group(), pos))
         pos = m.end()
@@ -88,20 +92,23 @@ class _Parser:
 
     def _expect_op(self, op: str) -> None:
         if not self._is_op(op):
-            raise self._unexpected(f"expected {op!r}")
+            raise self._unexpected(Msg("expected {op}", op=repr(op)))
         self.i += 1
 
-    def _unexpected(self, hint: str = "") -> FormulaError:
+    def _unexpected(self, hint=None) -> FormulaError:
         kind, text, pos = self._peek()
-        what = "end of formula" if kind == "end" else repr(text)
-        where = "" if pos < 0 else f" at position {pos + 1}"
-        suffix = f" ({hint})" if hint else ""
-        return FormulaError(f"Unexpected {what}{where}{suffix}")
+        if kind == "end":
+            msg = Msg("Unexpected end of formula")
+        else:
+            msg = Msg("Unexpected {token} at position {pos}", token=repr(text), pos=pos + 1)
+        if hint:
+            msg = Msg("{error} ({hint})", error=msg, hint=hint)
+        return FormulaError(msg)
 
     def _enter(self) -> None:
         self.depth += 1
         if self.depth > MAX_DEPTH:
-            raise FormulaError(f"Formula is nested too deeply (limit {MAX_DEPTH})")
+            raise FormulaError(Msg("Formula is nested too deeply (limit {limit})", limit=MAX_DEPTH))
 
     def parse(self):
         tree = self._expression()
@@ -154,7 +161,7 @@ class _Parser:
             self.i += 1
             value = float(text)
             if not math.isfinite(value):
-                raise FormulaError(f"Number {text[:20]!r} is out of range")
+                raise FormulaError(Msg("Number {number} is out of range", number=repr(text[:20])))
             return ("lit", value)
         if kind == "str":
             self.i += 1
@@ -177,7 +184,7 @@ class _Parser:
             self.i += 1
             kind, attr, _ = self._peek()
             if kind != "id":
-                raise self._unexpected("expected an attribute name after '!'")
+                raise self._unexpected(Msg("expected an attribute name after '!'"))
             self.i += 1
             return self._ref(text.lower(), attr.lower())
         if text.upper() in ("TRUE", "FALSE"):
@@ -195,7 +202,8 @@ class _Parser:
             while True:
                 args.append(self._expression())
                 if len(args) > MAX_ARGS:
-                    raise FormulaError(f"Too many arguments in {name}() (limit {MAX_ARGS})")
+                    raise FormulaError(Msg("Too many arguments in {name}() (limit {limit})",
+                                           name=name, limit=MAX_ARGS))
                 if not self._is_op(","):
                     break
                 self.i += 1
@@ -206,19 +214,19 @@ class _Parser:
 def parse(source: str) -> Formula:
     """Parse `source` (leading `=` optional); raises FormulaError on syntax or limits."""
     if not isinstance(source, str):
-        raise FormulaError("Formula must be text")
+        raise FormulaError(Msg("Formula must be text"))
     if len(source) > MAX_SOURCE:
-        raise FormulaError(f"Formula is too long (limit {MAX_SOURCE} characters)")
+        raise FormulaError(Msg("Formula is too long (limit {limit} characters)", limit=MAX_SOURCE))
     text = source.strip()
     if text.startswith("="):
         text = text[1:]
     if not text.strip():
-        raise FormulaError("Formula is empty")
+        raise FormulaError(Msg("Formula is empty"))
     parser = _Parser(_tokenize(text))
     try:
         tree = parser.parse()
     except RecursionError:
-        raise FormulaError("Formula is nested too deeply") from None
+        raise FormulaError(Msg("Formula is nested too deeply")) from None
     return Formula(source, frozenset(parser.refs), tree)
 
 
@@ -226,7 +234,7 @@ def parse(source: str) -> Formula:
 
 def _finite(value: float) -> float:
     if not math.isfinite(value):
-        raise FormulaError("Result is out of range")
+        raise FormulaError(Msg("Result is out of range"))
     return value
 
 
@@ -238,12 +246,12 @@ def _sanitize(value):
         try:
             return _finite(float(value))
         except OverflowError:
-            raise FormulaError("Number is out of range") from None
+            raise FormulaError(Msg("Number is out of range")) from None
     if isinstance(value, str):
         if len(value) > MAX_STRING:
-            raise FormulaError("Text is too long")
+            raise FormulaError(Msg("Text is too long"))
         return value
-    raise FormulaError(f"Unsupported value of type {type(value).__name__}")
+    raise FormulaError(Msg("Unsupported value of type {type}", type=type(value).__name__))
 
 
 def _num(value) -> float:
@@ -258,8 +266,8 @@ def _num(value) -> float:
                 return _finite(float(text))
             except FormulaError:
                 pass
-        raise FormulaError(f"Cannot convert {value[:30]!r} to a number")
-    raise FormulaError("Expected a number")
+        raise FormulaError(Msg("Cannot convert {value} to a number", value=repr(value[:30])))
+    raise FormulaError(Msg("Expected a number"))
 
 
 def _int(value) -> int:
@@ -283,7 +291,7 @@ def _bool(value) -> bool:
         return value != 0.0
     if value.strip().upper() in ("TRUE", "FALSE"):
         return value.strip().upper() == "TRUE"
-    raise FormulaError(f"Cannot convert {value[:30]!r} to TRUE/FALSE")
+    raise FormulaError(Msg("Cannot convert {value} to TRUE/FALSE", value=repr(value[:30])))
 
 
 def _sort_key(value):
@@ -308,7 +316,7 @@ def _compare(op: str, a, b) -> bool:
 def _concat(*parts) -> str:
     result = "".join(_text(p) for p in parts)
     if len(result) > MAX_STRING:
-        raise FormulaError("Text is too long")
+        raise FormulaError(Msg("Text is too long"))
     return result
 
 
@@ -332,21 +340,31 @@ def _snap(q: float) -> float:
 def _floor(x, sig=1.0):
     s = abs(_num(sig))
     if s == 0:
-        raise FormulaError("FLOOR: significance must not be 0")
+        raise FormulaError(Msg("{name}: significance must not be 0", name="FLOOR"))
     return math.floor(_snap(_num(x) / s)) * s
 
 
 def _ceiling(x, sig=1.0):
     s = abs(_num(sig))
     if s == 0:
-        raise FormulaError("CEILING: significance must not be 0")
+        raise FormulaError(Msg("{name}: significance must not be 0", name="CEILING"))
     return math.ceil(_snap(_num(x) / s)) * s
+
+
+def _mod(n, d):
+    """Excel's MOD: n - d*INT(n/d); the result has the sign of the divisor."""
+    divisor = _num(d)
+    if divisor == 0:
+        raise FormulaError(Msg("Division by zero"))
+    value = _num(n)
+    result = value - divisor * math.floor(_snap(value / divisor))
+    return 0.0 if abs(result) < 1e-12 * max(1.0, abs(divisor)) else result
 
 
 def _sqrt(x):
     v = _num(x)
     if v < 0:
-        raise FormulaError("SQRT of a negative number")
+        raise FormulaError(Msg("SQRT of a negative number"))
     return math.sqrt(v)
 
 
@@ -357,45 +375,45 @@ def _clean(v: float) -> float:
 def _tan(x):
     angle = math.radians(_num(x))
     if abs(math.cos(angle)) < 1e-12:
-        raise FormulaError("TAN is undefined for this angle")
+        raise FormulaError(Msg("TAN is undefined for this angle"))
     return _clean(math.tan(angle))
 
 
 def _asin(x):
     v = _num(x)
     if not -1.0 <= v <= 1.0:
-        raise FormulaError("ASIN argument must be between -1 and 1")
+        raise FormulaError(Msg("{name} argument must be between -1 and 1", name="ASIN"))
     return math.degrees(math.asin(v))
 
 
 def _acos(x):
     v = _num(x)
     if not -1.0 <= v <= 1.0:
-        raise FormulaError("ACOS argument must be between -1 and 1")
+        raise FormulaError(Msg("{name} argument must be between -1 and 1", name="ACOS"))
     return math.degrees(math.acos(v))
 
 
 def _count(value, what: str) -> int:
     n = _int(value)
     if n < 0:
-        raise FormulaError(f"{what} must not be negative")
+        raise FormulaError(Msg("{what} must not be negative", what=what))
     return n
 
 
 def _left(s, n=1.0):
-    return _text(s)[:_count(n, "LEFT length")]
+    return _text(s)[:_count(n, N_("LEFT length"))]
 
 
 def _right(s, n=1.0):
-    count = _count(n, "RIGHT length")
+    count = _count(n, N_("RIGHT length"))
     return _text(s)[-count:] if count else ""
 
 
 def _mid(s, start, n):
     first = _int(start)
     if first < 1:
-        raise FormulaError("MID start must be at least 1")
-    return _text(s)[first - 1:first - 1 + _count(n, "MID length")]
+        raise FormulaError(Msg("MID start must be at least 1"))
+    return _text(s)[first - 1:first - 1 + _count(n, N_("MID length"))]
 
 
 def _trim(s):
@@ -418,6 +436,7 @@ _FUNCS = {
     "FLOOR": (1, 2, _floor),
     "CEILING": (1, 2, _ceiling),
     "INT": (1, 1, lambda v: float(math.floor(_num(v)))),
+    "MOD": (2, 2, _mod),
     "SQRT": (1, 1, _sqrt),
     "SIN": (1, 1, lambda v: _clean(math.sin(math.radians(_num(v))))),
     "COS": (1, 1, lambda v: _clean(math.cos(math.radians(_num(v))))),
@@ -455,7 +474,7 @@ class _Interpreter:
     def step(self) -> None:
         self.used += 1
         if self.used > self.budget:
-            raise FormulaError("Formula is too expensive to evaluate (step budget exceeded)")
+            raise FormulaError(Msg("Formula is too expensive to evaluate (step budget exceeded)"))
 
     def ev(self, node):
         self.step()
@@ -464,7 +483,7 @@ class _Interpreter:
             # Text ops cost O(length): charge it, or 64 KiB strings turn the step budget into a hang.
             self.used += len(value) >> 8
             if self.used > self.budget:
-                raise FormulaError("Formula is too expensive to evaluate (step budget exceeded)")
+                raise FormulaError(Msg("Formula is too expensive to evaluate (step budget exceeded)"))
         return value
 
     def _ev(self, node):
@@ -506,7 +525,7 @@ class _Interpreter:
         if op == "*":
             return _finite(x * y)
         if y == 0:
-            raise FormulaError("Division by zero")
+            raise FormulaError(Msg("Division by zero"))
         return _finite(x / y)
 
     @staticmethod
@@ -514,18 +533,18 @@ class _Interpreter:
         try:
             return _finite(math.pow(base, exponent))
         except OverflowError:
-            raise FormulaError("Result of ^ is out of range") from None
+            raise FormulaError(Msg("Result of ^ is out of range")) from None
         except ValueError:
             if base == 0:
-                raise FormulaError("Division by zero") from None
-            raise FormulaError("Cannot raise a negative number to a fractional power") from None
+                raise FormulaError(Msg("Division by zero")) from None
+            raise FormulaError(Msg("Cannot raise a negative number to a fractional power")) from None
 
     def _call(self, name: str, args):
         if name in _LAZY:
             self._check_arity(name, len(args), *_LAZY[name])
             return self._lazy(name, args)
         if name not in _FUNCS:
-            raise FormulaError(f"Unknown function {name}")
+            raise FormulaError(Msg("Unknown function {name}", name=name))
         lo, hi, impl = _FUNCS[name]
         self._check_arity(name, len(args), lo, hi)
         values = [self.ev(a) for a in args]
@@ -534,13 +553,17 @@ class _Interpreter:
         except FormulaError:
             raise
         except (ArithmeticError, ValueError) as exc:
-            raise FormulaError(f"{name}: invalid argument ({type(exc).__name__})") from None
+            raise FormulaError(Msg("{name}: invalid argument ({kind})", name=name,
+                                   kind=type(exc).__name__)) from None
 
     @staticmethod
     def _check_arity(name: str, n: int, lo: int, hi: int) -> None:
         if not lo <= n <= hi:
-            expected = str(lo) if lo == hi else f"{lo} to {hi}"
-            raise FormulaError(f"{name} expects {expected} argument(s), got {n}")
+            if lo == hi:
+                raise FormulaError(Msg("{name} expects {count} argument(s), got {got}",
+                                       name=name, count=lo, got=n))
+            raise FormulaError(Msg("{name} expects {low} to {high} argument(s), got {got}",
+                                   name=name, low=lo, high=hi, got=n))
 
     def _lazy(self, name: str, args):
         if name == "IF":
@@ -549,7 +572,8 @@ class _Interpreter:
             return self.ev(args[2]) if len(args) > 2 else False
         index = _int(self.ev(args[0]))
         if not 1 <= index < len(args):
-            raise FormulaError(f"CHOOSE index {index} is out of range 1..{len(args) - 1}")
+            raise FormulaError(Msg("CHOOSE index {index} is out of range 1..{last}",
+                                   index=index, last=len(args) - 1))
         return self.ev(args[index])
 
 
@@ -562,9 +586,9 @@ def run(f: Formula, lookup, *, budget: int = DEFAULT_BUDGET):
         exc.steps = interp.used
         raise
     except RecursionError:
-        error = FormulaError("Formula is nested too deeply")
+        error = FormulaError(Msg("Formula is nested too deeply"))
     except Exception as exc:  # noqa: BLE001 - trust boundary, nothing else may escape
-        error = FormulaError(f"Evaluation failed ({type(exc).__name__})")
+        error = FormulaError(Msg("Evaluation failed ({kind})", kind=type(exc).__name__))
     error.steps = interp.used
     raise error
 

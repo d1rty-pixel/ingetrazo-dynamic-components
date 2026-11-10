@@ -270,3 +270,29 @@ def test_number_text_formatting():
 def test_returns_only_plain_types():
     for src in ("=1", '="a"', "=1=1", "=PI()", "=LEN(\"a\")"):
         assert type(run(src)) in (float, str, bool)
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("=MOD(7, 3)", 1.0), ("=MOD(-7, 3)", 2.0), ("=MOD(7, -3)", -2.0),
+    ("=MOD(7.5, 2)", 1.5), ("=MOD(0.3, 0.1)", 0.0), ("=MOD(6, 3)", 0.0),
+])
+def test_mod_follows_excel(src, expected):
+    assert run(src) == pytest.approx(expected, abs=1e-12)
+
+
+def test_mod_by_zero_fails():
+    assert "zero" in fails("=MOD(1, 0)")
+
+
+def test_errors_carry_translatable_messages():
+    with pytest.raises(FormulaError) as exc:
+        run("=NOPE(1)")
+    msg = exc.value.msg
+    assert msg.template == "Unknown function {name}" and msg.params == {"name": "NOPE"}
+    assert str(exc.value) == "Unknown function NOPE"
+    with pytest.raises(FormulaError) as exc:
+        parse("=1 +")
+    assert exc.value.msg.template == "Unexpected end of formula"
+    with pytest.raises(FormulaError) as exc:
+        run("=MAX()")
+    assert exc.value.msg.params["name"] == "MAX"

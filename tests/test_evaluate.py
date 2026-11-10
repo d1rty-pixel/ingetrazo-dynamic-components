@@ -358,3 +358,33 @@ def test_material_and_rotation_fields():
                     "rotz": {"type": "float", "formula": "=90"}})
     pl = evaluate(spec, {}).placements["p"][0]
     assert pl.material == "Oak" and pl.rotz == 90.0 and pl.rotx is None
+
+
+def test_show_if_is_evaluated_and_fails_open():
+    spec = build({
+        "mode": {"type": "string", "value": "auto"},
+        "count": {"type": "int", "value": 3, "show_if": '=Mode="fixed"'},
+        "gap": L(value=0.3, show_if="=Mode=\"auto\""),
+        "broken": L(value=1, show_if="=Ghost > 1"),
+        "plain": L(value=2)})
+    r = evaluate(spec, {})
+    assert r.visible == {("", "count"): False, ("", "gap"): True, ("", "broken"): True}
+    assert "Show if" in r.errors[("", "broken")]
+    assert r.values[""]["broken"] == 1.0                     # values untouched
+    r = evaluate(spec, {"": {"mode": "fixed"}})
+    assert r.visible[("", "count")] is True and r.visible[("", "gap")] is False
+
+
+def test_show_if_on_a_part_reads_its_own_attributes():
+    spec = build({"on": {"type": "bool", "value": False}},
+                 leaf={"x": L(value=1, show_if="=Parent!On")})
+    assert evaluate(spec, {}).visible[("leaf", "x")] is False
+
+
+def test_errors_are_messages():
+    spec = build({"a": L(formula="=1/0")}, p={"x": L(formula="=1/(Copy-2)"),
+                                               "copies": {"type": "int", "formula": "=3"}})
+    r = evaluate(spec, {})
+    assert r.errors[("", "a")].template == "Division by zero"
+    copy_error = r.errors[("p", "x")]
+    assert copy_error.template == "Copy {index}: {error}" and copy_error.params["index"] == 2

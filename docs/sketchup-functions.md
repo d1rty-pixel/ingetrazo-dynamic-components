@@ -56,8 +56,10 @@ Status: **yes** = in `formula._FUNCS` / `_LAZY`; **no** = missing.
 
 ## Functions we have that the screenshot does not show
 
-`IF, AND, OR, NOT, MIN, MAX, INT, SIN, COS, TAN, ASIN, ACOS, ATAN, LEN, LEFT, RIGHT,
-MID, CONCATENATE, VALUE, LOWER, UPPER, TRIM`. They probably sit in categories further
+`IF, AND, OR, NOT, MIN, MAX, INT, MOD, SIN, COS, TAN, ASIN, ACOS, ATAN, LEN, LEFT,
+RIGHT, MID, CONCATENATE, VALUE, LOWER, UPPER, TRIM`. `MOD` (Excel semantics, sign of
+the divisor) was added for grids from one `Copy` index; whether SketchUp lists it
+**(to verify)**. They probably sit in categories further
 down the list (logical, trigonometric, text); confirm when those are captured.
 
 ## Notes for implementing the missing ones

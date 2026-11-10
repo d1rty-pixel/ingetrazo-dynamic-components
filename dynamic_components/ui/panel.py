@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from ..i18n import tr
+from ..i18n import tr, tr_error
 from .attributes import AttributesEditor
 from .common import KEY, error_label, host_fold, muted
 from .options import OptionsForm
@@ -93,6 +93,24 @@ class DynamicPanel(QWidget):
         self.missing_box.setVisible(False)
         outer.addWidget(self.missing_box)
 
+        # Generated parts someone edited by hand: kept until regenerated.
+        self.edited_box = QFrame()
+        self.edited_box.setObjectName("edited")
+        self.edited_box.setStyleSheet(
+            "QFrame#edited { border: 1px solid #e79b38; border-radius: 4px; }")
+        edited = QHBoxLayout(self.edited_box)
+        edited.setContentsMargins(8, 6, 8, 6)
+        self.edited_label = QLabel()
+        self.edited_label.setWordWrap(True)
+        self.edited_button = QPushButton(tr("Regenerate"))
+        self.edited_button.setToolTip(tr(
+            "Build these parts from the formulas again; the edits made by hand "
+            "are lost (one undo step)."))
+        edited.addWidget(self.edited_label, 1)
+        edited.addWidget(self.edited_button, 0, Qt.AlignVCenter)
+        self.edited_box.setVisible(False)
+        outer.addWidget(self.edited_box)
+
         # The host has the component open for editing: shown, not editable.
         self.open_note = QLabel()
         self.open_note.setWordWrap(True)
@@ -125,6 +143,7 @@ class DynamicPanel(QWidget):
         self.make_button.clicked.connect(self.make_dynamic)
         self.loose_button.clicked.connect(self.add_parts)
         self.missing_button.clicked.connect(self.remove_missing)
+        self.edited_button.clicked.connect(self.regenerate)
         self.refresh()
 
     # ---------------------------------------------------------------- state
@@ -167,6 +186,7 @@ class DynamicPanel(QWidget):
                 group is not None and not dynamic and _component(group))
             self.loose_box.setVisible(False)
             self.missing_box.setVisible(False)
+            self.edited_box.setVisible(False)
             self.open_note.setVisible(False)
             self.attributes.clear()
             return
@@ -190,6 +210,7 @@ class DynamicPanel(QWidget):
         self.attributes.show_group(group, definition, inst, present=present)
         self._show_loose(binding.loose_children(group))
         self._show_missing(definition, binding.missing_parts(self.app.scene, group))
+        self._show_edited(definition, binding.edited_parts(group))
         self._show_open(opened)
 
     def _show_open(self, opened) -> None:
@@ -199,7 +220,7 @@ class DynamicPanel(QWidget):
                 "You are editing inside this component. Leave it (Esc, or click "
                 "outside it) to change its options and attributes."))
         for widget in (self.scroll.widget(), self.bake_button, self.loose_button,
-                       self.missing_button):
+                       self.missing_button, self.edited_button):
             widget.setEnabled(not opened)
         if not opened:
             self.loose_button.setEnabled(not self.attributes.dirty)
@@ -219,6 +240,18 @@ class DynamicPanel(QWidget):
              if len(missing) == 1 else
              tr("{names} are in the definition but have no group here (deleted)."))
             .replace("{names}", names))
+
+    def _show_edited(self, definition, names) -> None:
+        from .common import node_title
+        self.edited_box.setVisible(bool(names))
+        if not names:
+            return
+        shown = ", ".join(f"“{node_title(definition, n)}”" for n in names[:5])
+        if len(names) > 5:
+            shown += ", …"
+        self.edited_label.setText(tr(
+            "{names}: edited by hand, so the formulas no longer shape it.",
+            names=shown))
 
     def _show_loose(self, loose) -> None:
         self.loose_box.setVisible(bool(loose))
@@ -267,7 +300,7 @@ class DynamicPanel(QWidget):
         try:
             binding.run(self.app.viewport, mutate, [group], label)
         except Exception as exc:  # noqa: BLE001 - a Qt slot must not raise
-            self.status.setText(f"{label}: {exc}")
+            self.status.setText(f"{label}: {tr_error(exc)}")
             self.status.setVisible(True)
             return
         self.status.setVisible(False)
@@ -296,6 +329,13 @@ class DynamicPanel(QWidget):
         binding, _ = _modules()
         self._run(tr("Remove parts from dynamic component"),
                   lambda s: binding.remove_parts(s, group, names), group)
+
+    def regenerate(self) -> None:
+        group = self.group
+        if group is None:
+            return
+        binding, _ = _modules()
+        self._run(tr("Regenerate parts"), lambda s: binding.regenerate(s, group), group)
 
     def make_dynamic(self) -> None:
         group = self._selected()

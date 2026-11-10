@@ -228,3 +228,59 @@ def test_coerce_choice():
 def test_coerce_unknown_type():
     with pytest.raises(SpecError):
         coerce({"type": "weird"}, 1)
+
+
+def test_section_show_if_and_warn_are_kept():
+    s = minimal()
+    s["nodes"][""]["attrs"]["Width"].update(section="Carcass", show_if="=TRUE")
+    s["nodes"][""]["attrs"]["Note"] = {"type": "string", "access": "warn", "formula": '="x"'}
+    out = normalize(s)["nodes"][""]["attrs"]
+    assert out["width"]["section"] == "Carcass" and out["width"]["show_if"] == "=TRUE"
+    assert out["note"]["access"] == "warn"
+    assert "section" not in out["note"] and "show_if" not in out["note"]
+    s["nodes"][""]["attrs"]["Width"]["section"] = "x" * 300
+    with pytest.raises(SpecError):
+        normalize(s)
+
+
+def test_generator_and_cutter_links():
+    s = minimal()
+    s["nodes"]["Side"] = {"gen": "Board@1", "attrs": {}}
+    s["nodes"]["Hole"] = {"cut": "Side", "attrs": {}}
+    out = normalize(s)["nodes"]
+    assert out["side"]["gen"] == "board@1" and out["hole"]["cut"] == "side"
+    assert "gen" not in out["leaf"] and "cut" not in out["leaf"]
+
+
+@pytest.mark.parametrize("nodes", [
+    {"Side": {"gen": "board"}},                              # no version
+    {"Side": {"gen": "board@1; rm"}},
+    {"Hole": {"cut": "Nowhere"}},
+    {"Hole": {"cut": "Hole"}},                               # itself
+    {"Hole": {"cut": ""}, "Hole2": {"cut": "Hole3"}},
+    {"Hole": {"cut": "Leaf", "gen": "board@1"}},             # both
+    {"A": {"cut": "Leaf"}, "B": {"cut": "A"}},               # cuts a cutter
+])
+def test_bad_links_are_refused(nodes):
+    s = minimal()
+    for name, body in nodes.items():
+        s["nodes"][name] = {"attrs": {}, **body}
+    with pytest.raises(SpecError):
+        normalize(s)
+
+
+def test_root_cannot_be_generated_or_cut():
+    s = minimal()
+    s["nodes"][""]["gen"] = "board@1"
+    with pytest.raises(SpecError):
+        normalize(s)
+    s = minimal()
+    s["nodes"][""]["cut"] = "leaf"
+    with pytest.raises(SpecError):
+        normalize(s)
+
+
+def test_spec_errors_are_translatable():
+    with pytest.raises(SpecError) as exc:
+        normalize({"version": 2})
+    assert exc.value.msg.template == "Unsupported spec version {version}"

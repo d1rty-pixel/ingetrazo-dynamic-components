@@ -7,9 +7,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QFormLayout, QHBoxLayout, QLabel, QToolButton,
                                QVBoxLayout, QWidget)
 
-from ..i18n import tr
+from ..i18n import tr, tr_error, tr_msg
 from .common import (KEY, Lengths, ValueEditor, attr_label, error_label,
-                     muted, node_title, same_value, value_text)
+                     muted, node_title, same_value, value_text, warning_label)
 
 
 def _modules():
@@ -18,9 +18,12 @@ def _modules():
 
 
 class _Row:
-    def __init__(self, node, name, attr, editor, view, reset, error):
+    def __init__(self, node, name, attr, editor, view, reset, error,
+                 form=None, field=None, section=None):
         self.node, self.name, self.attr = node, name, attr
         self.editor, self.view, self.reset, self.error = editor, view, reset, error
+        self.form, self.field, self.section = form, field, section
+        self.warning = None                    # the label of a `warn` row
         self.shown = None                      # the value the field shows now
 
 
@@ -52,17 +55,29 @@ class OptionsForm(QWidget):
 
     @staticmethod
     def _entries(spec_mod, definition):
-        entries = list(spec_mod.editable_attrs(definition))
+        """Rows in reading order: attributes without a section first, then
+        each section in the order it first appears."""
+        entries = []
         for node, body in definition["nodes"].items():
             for name, attr in body.get("attrs", {}).items():
-                if attr.get("access") == "view":
+                if attr.get("access") in ("textbox", "list", "view", "warn"):
                     entries.append((node, name, attr))
-        return entries
+        order = []
+        for _n, _a, attr in entries:
+            section = attr.get("section") or ""
+            if section not in order:
+                order.append(section)
+        if "" in order:
+            order.remove("")
+            order.insert(0, "")
+        return [e for section in order for e in entries
+                if (e[2].get("section") or "") == section]
 
     def _shape_of(self, definition, entries):
         return json.dumps([[n, a, attr.get("label"), attr.get("type"),
                             attr.get("access"), attr.get("options"),
                             attr.get("min"), attr.get("max"),
+                            attr.get("section"), bool(attr.get("show_if")),
                             node_title(definition, n)]
                            for n, a, attr in entries], default=str)
 
@@ -83,27 +98,55 @@ class OptionsForm(QWidget):
             return True
         return False
 
-    def _rebuild(self, definition, entries):
-        old = self._host
-        self._host = QWidget()
-        form = QFormLayout(self._host)
+    @staticmethod
+    def _form():
+        form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        return form
+
+    def _rebuild(self, definition, entries):
+        old = self._host
+        self._host = QWidget()
+        column = QVBoxLayout(self._host)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
         self.layout().replaceWidget(old, self._host)
         old.deleteLater()
         self._rows = {}
+        self._headers = {}
+        form, current = None, None
         for node, name, attr in entries:
+            section = attr.get("section") or ""
+            if form is None or section != current:
+                current = section
+                if section:
+                    header = QLabel(section)
+                    header.setTextFormat(Qt.PlainText)
+                    header.setStyleSheet("font-weight: bold; padding-top: 4px;")
+                    column.addWidget(header)
+                    self._headers[section] = header
+                form = self._form()
+                column.addLayout(form)
             label = attr_label(name, attr)
             if node:
                 label = f"{node_title(definition, node)}: {label}"
+            if attr.get("access") == "warn":
+                warning = warning_label()
+                form.addRow(warning)
+                row = _Row(node, name, attr, None, None, None, error_label(),
+                           form, warning, section)
+                row.warning = warning
+                self._rows[(node, name)] = row
+                continue
             field = QWidget()
-            column = QVBoxLayout(field)
-            column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(1)
+            column_ = QVBoxLayout(field)
+            column_.setContentsMargins(0, 0, 0, 0)
+            column_.setSpacing(1)
             line = QHBoxLayout()
             line.setContentsMargins(0, 0, 0, 0)
-            column.addLayout(line)
+            column_.addLayout(line)
             editor = view = reset = None
             if attr.get("access") == "view":
                 view = QLabel()
@@ -125,11 +168,12 @@ class OptionsForm(QWidget):
                 editor.changed.connect(lambda *_a, k=key: self._commit(k))
                 reset.clicked.connect(lambda _c=False, k=key: self._reset(k))
             error = error_label()
-            column.addWidget(error)
+            column_.addWidget(error)
             caption = QLabel(label)
             caption.setWordWrap(True)
             form.addRow(caption, field)
-            self._rows[(node, name)] = _Row(node, name, attr, editor, view, reset, error)
+            self._rows[(node, name)] = _Row(node, name, attr, editor, view, reset, error,
+                                            form, field, section)
         self.empty.setVisible(not self._rows)
 
     # ------------------------------------------------------------- values
@@ -147,9 +191,25 @@ class OptionsForm(QWidget):
 
     def _update(self, result) -> None:
         errors = dict(getattr(result, "errors", None) or {})
+        visible = dict(getattr(result, "visible", None) or {})
+        shown_sections = set()
         for key, row in self._rows.items():
             value = self._current(row.node, row.name, row.attr)
             row.shown = value
+            show = bool(visible.get(key, True))
+            if row.warning is not None:
+                text = "" if value in (None, False, 0, 0.0) else str(value)
+                row.warning.setText("⚠ " + text if text else "")
+                show = show and bool(text)
+                if row.form is not None:
+                    row.form.setRowVisible(row.warning, show)
+                if show:
+                    shown_sections.add(row.section)
+                continue
+            if row.form is not None and row.field is not None:
+                row.form.setRowVisible(row.field, show)
+            if show:
+                shown_sections.add(row.section)
             if row.view is not None:
                 row.view.setText(value_text(row.attr.get("type"), value,
                                             self._lengths, row.name))
@@ -159,16 +219,18 @@ class OptionsForm(QWidget):
                 row.editor.set(value)
             if row.reset is not None:
                 row.reset.setVisible(self._overridden(row.node, row.name))
-            message = errors.get(key, "")
+            message = tr_msg(errors.get(key, ""))
             row.error.setText(message)
             row.error.setVisible(bool(message))
+        for section, header in getattr(self, "_headers", {}).items():
+            header.setVisible(section in shown_sections)
         self.status.setText(self.status_text)
         self.status.setVisible(bool(self.status_text))
 
     def changed_values(self) -> dict:
         changed = {}
         for (node, name), row in self._rows.items():
-            if row.editor is None:
+            if row.editor is None or row.warning is not None:
                 continue
             now = row.editor.read()
             if not same_value(now, row.shown):
@@ -186,7 +248,7 @@ class OptionsForm(QWidget):
         try:
             binding.run(self.app.viewport, mutate, [group], label)
         except Exception as exc:  # noqa: BLE001 - a Qt slot must not raise
-            self.status_text = str(exc)
+            self.status_text = tr_error(exc)
             self._update(None)
             return None
         self.status_text = ""

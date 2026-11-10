@@ -13,11 +13,11 @@ from PySide6.QtWidgets import (QComboBox, QCompleter, QFormLayout, QFrame,
                                QTableWidgetItem, QToolButton, QVBoxLayout,
                                QWidget)
 
-from ..i18n import tr
-from .common import (ACCESS_LABELS, ROOT_RESERVED, RESERVED_LABELS,
-                     TYPE_LABELS, Fold, Lengths, ValueEditor, attr_label,
-                     error_label, is_reserved, muted, narrow, node_title,
-                     reference, scroll_safe, value_text)
+from ..i18n import N_, tr, tr_error, tr_msg
+from .common import (ACCESS_LABELS, GENERATOR_LABELS, ROOT_RESERVED,
+                     RESERVED_LABELS, TYPE_LABELS, Fold, Lengths, ValueEditor,
+                     attr_label, error_label, is_reserved, muted, narrow,
+                     node_title, reference, scroll_safe, value_text)
 
 KEY = "dynamic_components"
 
@@ -32,12 +32,14 @@ _NAME_RE = re.compile(r"^[^\W\d]\w*$")
 _TOKEN_RE = re.compile(r"[^\W\d][\w!]*$")
 # Argument hints for the function picker; anything missing shows "value".
 _HINTS = {
-    "IF": "test, then, else", "CHOOSE": "index, value1, value2, …",
-    "AND": "a, b, …", "OR": "a, b, …", "NOT": "value",
-    "MIN": "a, b, …", "MAX": "a, b, …", "ROUND": "number, decimals",
-    "FLOOR": "number, step", "CEILING": "number, step", "PI": "",
-    "LEFT": "text, count", "RIGHT": "text, count", "MID": "text, start, count",
-    "CONCATENATE": "text1, text2, …", "LEN": "text",
+    "IF": N_("test, then, else"), "CHOOSE": N_("index, value1, value2, …"),
+    "AND": N_("a, b, …"), "OR": N_("a, b, …"), "NOT": N_("value"),
+    "MIN": N_("a, b, …"), "MAX": N_("a, b, …"), "ROUND": N_("number, decimals"),
+    "FLOOR": N_("number, step"), "CEILING": N_("number, step"), "PI": "",
+    "MOD": N_("number, divisor"),
+    "LEFT": N_("text, count"), "RIGHT": N_("text, count"),
+    "MID": N_("text, start, count"),
+    "CONCATENATE": N_("text1, text2, …"), "LEN": N_("text"),
 }
 
 
@@ -62,7 +64,8 @@ def _fingerprint(definition) -> str:
 
 
 def _shape(work) -> str:
-    return json.dumps({n: list(b.get("attrs", {})) for n, b in work["nodes"].items()})
+    return json.dumps({n: [list(b.get("attrs", {})), b.get("gen"), b.get("cut")]
+                       for n, b in work["nodes"].items()})
 
 
 # ------------------------------------------------------------------ widgets
@@ -385,7 +388,7 @@ class AttributesEditor(QWidget):
                                      copy.deepcopy(self.inst.get("set") or {}),
                                      self.inst.get("last")), ""
         except Exception as exc:  # noqa: BLE001 - shown, never raised
-            return None, str(exc)
+            return None, tr_error(exc)
 
     def _render(self, force=False) -> None:
         if self.work is None:
@@ -403,6 +406,7 @@ class AttributesEditor(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows, self._folds, self._card = {}, {}, None
+        self._problem_labels = {}
         if self.work is None:
             self._shape = None
             return
@@ -415,6 +419,11 @@ class AttributesEditor(QWidget):
             column = QVBoxLayout(fold.body)
             column.setContentsMargins(4, 4, 4, 4)
             column.setSpacing(2)
+            if node:
+                column.addWidget(self._geometry_row(node))
+                problems = error_label()
+                column.addWidget(problems)
+                self._problem_labels[node] = problems
             for name in body.get("attrs", {}):
                 row = _AttrRow(self, node, name)
                 column.addWidget(row)
@@ -440,7 +449,81 @@ class AttributesEditor(QWidget):
         count = len(self.work["nodes"][node].get("attrs", {}))
         title = node_title(self.work, node)
         prefix = tr("Attributes") if node == "" else tr("Part")
-        return f"{prefix}: {title}  ({count})"
+        body = self.work["nodes"][node]
+        mark = ""
+        if body.get("cut"):
+            mark = "  ✂"
+        elif body.get("gen"):
+            mark = "  ⚙"
+        if node in self._problems():
+            mark += "  ⚠"
+        return f"{prefix}: {title}  ({count}){mark}"
+
+    def _problems(self) -> dict:
+        if self.group is None:
+            return {}
+        binding = _modules()[0]
+        try:
+            return binding.problems(self.group)
+        except Exception:  # noqa: BLE001 - shown, never raised
+            return {}
+
+    def _geometry_row(self, node) -> QWidget:
+        """How the part gets its shape: stretched or a generator; and which
+        part it cuts, if it is a cutter."""
+        from .. import generators
+        body = self.work["nodes"][node]
+        box = QWidget()
+        form = QFormLayout(box)
+        form.setContentsMargins(2, 0, 2, 4)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        gen = scroll_safe(narrow(QComboBox()))
+        gen.addItem(tr("Stretched"), "")
+        for name in generators.names():
+            gen.addItem(tr(GENERATOR_LABELS.get(name, name)), name)
+        current = body.get("gen") or ""
+        if current and gen.findData(current) < 0:
+            gen.addItem(tr("{name} (not installed)", name=current), current)
+        gen.setCurrentIndex(max(0, gen.findData(current)))
+        gen.setToolTip(tr(
+            "Stretched: the part's mesh is scaled to its size (shared, fast). "
+            "A generator builds the mesh at its size, so holes stay round and "
+            "boards keep their edges; other parts can cut into it."))
+        targeted = any(b.get("cut") == node for b in self.work["nodes"].values())
+        cut = scroll_safe(narrow(QComboBox()))
+        cut.addItem(tr("Nothing"), "")
+        for other, other_body in self.work["nodes"].items():
+            if other in ("", node) or other_body.get("cut") or not self._shows(other):
+                continue
+            cut.addItem(node_title(self.work, other), other)
+        current_cut = body.get("cut") or ""
+        if current_cut and cut.findData(current_cut) < 0:
+            cut.addItem(current_cut, current_cut)
+        cut.setCurrentIndex(max(0, cut.findData(current_cut)))
+        cut.setEnabled(not targeted)
+        cut.setToolTip(tr("Other parts cut into this one, so it cannot cut itself.")
+                       if targeted else tr(
+            "A cutter is never drawn: its box (a cylinder makes a round hole, "
+            "a box a rectangular one) is cut out of the chosen part where they "
+            "meet. Its Hidden attribute switches the cut off."))
+        gen.activated.connect(lambda _i, n=node, c=gen: self.set_link(n, "gen", c.currentData()))
+        cut.activated.connect(lambda _i, n=node, c=cut: self.set_link(n, "cut", c.currentData()))
+        form.addRow(tr("Geometry"), gen)
+        form.addRow(tr("Cuts into"), cut)
+        return box
+
+    def set_link(self, node, key, value) -> None:
+        """Make ``node`` generated (key "gen") or a cutter (key "cut"); the
+        two exclude each other."""
+        body = self.work["nodes"][node]
+        if value:
+            body[key] = value
+            body.pop("cut" if key == "gen" else "gen", None)
+        else:
+            body.pop(key, None)
+        self._shape = None
+        self._changed()
 
     def _refresh_texts(self) -> None:
         result, problem = self._evaluate()
@@ -461,10 +544,15 @@ class AttributesEditor(QWidget):
             else:
                 row.detail.set_full("")
             row.detail.setVisible(bool(row.detail.full()))
-            message = errors.get((node, name), "")
+            message = tr_msg(errors.get((node, name), ""))
             row.error.setText(message)
             row.error.setVisible(bool(message))
             row.set_selected((node, name) == self.current)
+        problems = self._problems()
+        for node, label in getattr(self, "_problem_labels", {}).items():
+            text = "\n".join("⚠ " + tr_msg(m) for m in problems.get(node, [])[:5])
+            label.setText(text)
+            label.setVisible(bool(text))
         for node, fold in self._folds.items():
             fold.set_title(self._fold_title(node))
         if self._card is not None:
@@ -617,19 +705,20 @@ class AttributesEditor(QWidget):
         binding, _, formula, spec = _modules()
         for node, body in self.work["nodes"].items():
             for name, attr in body.get("attrs", {}).items():
-                if not attr.get("formula"):
-                    continue
-                try:
-                    formula.parse(attr["formula"])
-                except formula.FormulaError as exc:
-                    self.dirty = True
-                    self.status.setText(
-                        tr("Not applied yet — fix the formula of {a}: {e}")
-                        .replace("{a}", f"{node_title(self.work, node)} › "
-                                        f"{attr_label(name, attr)}")
-                        .replace("{e}", str(exc)))
-                    self.status.setVisible(True)
-                    return False
+                for key in ("formula", "show_if"):
+                    if not attr.get(key):
+                        continue
+                    try:
+                        formula.parse(attr[key])
+                    except formula.FormulaError as exc:
+                        self.dirty = True
+                        self.status.setText(
+                            tr("Not applied yet — fix the formula of {a}: {e}")
+                            .replace("{a}", f"{node_title(self.work, node)} › "
+                                            f"{attr_label(name, attr)}")
+                            .replace("{e}", tr_error(exc)))
+                        self.status.setVisible(True)
+                        return False
         def_id = self.def_id
         previous = self._known
         try:
@@ -648,7 +737,7 @@ class AttributesEditor(QWidget):
         except Exception as exc:  # noqa: BLE001 - shown to the user
             self._known = previous
             self.dirty = True
-            self.status.setText(str(exc))
+            self.status.setText(tr_error(exc))
             self.status.setVisible(True)
             return False
         self.dirty = False
@@ -770,6 +859,27 @@ class _Card(QFrame):
         self.access_combo.currentIndexChanged.connect(self._access_changed)
         form.addRow(tr("Users"), self.access_combo)
 
+        self.section_edit = narrow(QLineEdit(attr.get("section") or ""))
+        self.section_edit.setPlaceholderText(tr("No section"))
+        self.section_edit.setToolTip(tr(
+            "Options with the same section are shown together under this heading."))
+        self.section_edit.editingFinished.connect(self._section_done)
+        self._section_label = QLabel(tr("Section"))
+        form.addRow(self._section_label, self.section_edit)
+        self.show_if_edit = FormulaEdit()
+        narrow(self.show_if_edit)
+        self.show_if_edit.setPlaceholderText(tr("Always shown"))
+        self.show_if_edit.setToolTip(tr(
+            "A formula: the option is shown only while it is true, "
+            "e.g. =Plinth or =Mode=\"fixed\"."))
+        self.show_if_edit.setText(attr.get("show_if") or "")
+        self.show_if_edit.textEdited.connect(self._show_if_typed)
+        self.show_if_edit.editingFinished.connect(self._show_if_done)
+        self._show_if_label = QLabel(tr("Show if"))
+        form.addRow(self._show_if_label, self.show_if_edit)
+        self.show_if_error = error_label()
+        form.addRow("", self.show_if_error)
+
         self.limits = QWidget()
         limits = QHBoxLayout(self.limits)
         limits.setContentsMargins(0, 0, 0, 0)
@@ -805,6 +915,7 @@ class _Card(QFrame):
             lambda: owner.remove_attribute(self.node, self.name))
         self.done_button.setToolTip(tr("Close the editor; changes are applied as you go."))
         self.done_button.clicked.connect(lambda: owner.select(self.node, self.name))
+        self.show_if_edit.set_words(self._words())
         self._sync_kind_parts()
 
     # ----------------------------------------------------------- state
@@ -850,7 +961,8 @@ class _Card(QFrame):
         when the type or the access changes."""
         chain = [self.label_edit, self.name_edit, self.type_combo,
                  self._value_editor.widget if self._value_editor else None,
-                 self.formula_edit, self.access_combo, self.min_edit,
+                 self.formula_edit, self.access_combo, self.section_edit,
+                 self.show_if_edit, self.min_edit,
                  self.max_edit,
                  self.options_table.table if self.options_table else None,
                  self.options_table.add_button if self.options_table else None,
@@ -863,6 +975,12 @@ class _Card(QFrame):
     def _sync_kind_parts(self) -> None:
         kind = self._kind()
         attr = self.attr
+        shown = attr.get("access", "none") != "none"
+        for widget in (self._section_label, self.section_edit,
+                       self._show_if_label, self.show_if_edit):
+            widget.setVisible(shown)
+        if not shown:
+            self.show_if_error.setVisible(False)
         numeric = kind in _NUMERIC
         self.limits.setVisible(numeric)
         self._limits_label.setVisible(numeric)
@@ -912,9 +1030,9 @@ class _Card(QFrame):
             self.preview.setVisible(False)
             return
         self.preview.setVisible(True)
-        if message:
+        if message and not str(message).startswith("Show if: "):
             self.preview.setStyleSheet("color: #c0392b;")
-            self.preview.setText("✗ " + message)
+            self.preview.setText("✗ " + tr_msg(message))
             return
         value = values.get(self.node, {}).get(self.name)
         self.preview.setStyleSheet("color: #2e8b57;")
@@ -983,7 +1101,7 @@ class _Card(QFrame):
             except formula.FormulaError as exc:
                 self.preview.setVisible(True)
                 self.preview.setStyleSheet("color: #c0392b;")
-                self.preview.setText("✗ " + str(exc))
+                self.preview.setText("✗ " + tr_error(exc))
                 self.owner.dirty = True
                 return
         self.owner._changed(apply=False)     # preview only; applied on leaving
@@ -991,6 +1109,42 @@ class _Card(QFrame):
     def _formula_done(self) -> None:
         if self.name in self.owner._attrs(self.node):
             self.owner._changed()
+
+    def _section_done(self) -> None:
+        text = self.section_edit.text().strip()
+        if text == (self.attr.get("section") or ""):
+            return
+        if text:
+            self.attr["section"] = text
+        else:
+            self.attr.pop("section", None)
+        self.owner._changed()
+
+    def _show_if_typed(self, text) -> None:
+        _, _, formula, _ = _modules()
+        source = text.strip()
+        if source:
+            try:
+                formula.parse(source)
+            except formula.FormulaError as exc:
+                self.show_if_error.setText("✗ " + tr_error(exc))
+                self.show_if_error.setVisible(True)
+                self.owner.dirty = True
+                return
+        self.show_if_error.setVisible(False)
+
+    def _show_if_done(self) -> None:
+        if self.name not in self.owner._attrs(self.node):
+            return
+        source = self.show_if_edit.text().strip() or None
+        if source == (self.attr.get("show_if") or None):
+            if not self.owner.dirty:
+                return
+        if source:
+            self.attr["show_if"] = source
+        else:
+            self.attr.pop("show_if", None)
+        self.owner._changed()
 
     def _access_changed(self) -> None:
         self.attr["access"] = self.access_combo.currentData()
@@ -1060,7 +1214,8 @@ class _Card(QFrame):
         functions = menu.addMenu(tr("Functions"))
         _, _, formula, _ = _modules()
         for name in getattr(formula, "FUNCTIONS", ()):
-            hint = _HINTS.get(name, "value")
+            hint = _HINTS.get(name, N_("value"))
+            hint = tr(hint) if hint else ""
             action = functions.addAction(f"{name}({hint})")
             action.triggered.connect(
                 lambda _c=False, n=name: self.formula_edit.insert_text(n + "()", 1))

@@ -76,6 +76,9 @@ def fake_modules(spec=SPEC):
     binding.remove_parts = lambda s, g, names: calls.append(("remove_parts", g, list(names)))
     binding.dynamic_roots = lambda s: list(getattr(s, "dynamic_roots", []))
     binding.add_problem = lambda s, gs, r: getattr(r, "problem", None)
+    binding.edited_parts = lambda g: list(getattr(g, "edited", []))
+    binding.problems = lambda g: dict(getattr(g, "problems", {}))
+    binding.regenerate = lambda s, g: calls.append(("regenerate", g)) or 1
 
     def add_to_component(viewport, groups, root, label=""):
         calls.append(("add_to_component", list(groups), root))
@@ -159,3 +162,10 @@ class FakeApp:
 
     def on_document_changed(self, fn):
         self.document_hooks.append(fn)
+
+    def add_menu(self, title):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(title)
+        self.menus = getattr(self, "menus", [])
+        self.menus.append(menu)
+        return menu
