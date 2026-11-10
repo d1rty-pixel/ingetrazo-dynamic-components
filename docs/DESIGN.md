@@ -392,51 +392,64 @@ A cabinet has 20 options; one flat list does not work. Three attribute fields:
 `MOD(number, divisor)` (Excel semantics, sign of the divisor) joins the functions;
 it makes a 2D grid from one `Copy` index.
 
-## 15. Worked example: cabinet with plinth, shelf automatic and System 32
+## 15. Worked example: cabinet with plinth, shelves, dividers and System 32
 
 The model `models/system32-cabinet/` holds this component (`.igz`, and the script
-that builds it). The extension contains nothing specific to it. It uses only the
-features above; it is also the reference test for them. Root frame: X width, Y depth (front at 0), Z height.
+`build.py` that builds it). The extension contains nothing specific to it. It uses
+only the features above; it is also the reference test for them (`tests/test_cabinet.py`).
+Root frame: X width, Y depth (front at 0), Z height. Names below are the attribute
+names the formulas read (English, fixed; the labels are in the build language).
 
-**Parts.** Two sides (`board@1`), bottom, top, back panel, plinth panel, shelves
-(`Copies`), four hole rows (cutters: left/right × front/back).
+**Parts.** Two sides (`board@1`), bottom and top (`board@1`), back panel, plinth
+panel, shelves (`Copies`), dividers (`board@1`, `Copies`), four hole rows in the
+sides, two through-hole rows in the dividers, four groove cutters.
 
 **Plinth.** Sides run to the floor; with the plinth on, the bottom sits at
-`Z_Boden = IF(Sockel, Sockel_H, 0)` and a plinth panel, set back by
-`Sockel_Rueck`, closes the gap (`Hidden = NOT(Parent!Sockel)`).
+`Z_Bottom = IF(Plinth, Plinth_H, 0)` and a plinth panel, set back by `Plinth_Set`,
+closes the gap (`Hidden = NOT(Parent!Plinth)`). `In_Low`, `In_Top`, `In_H` are the
+inner space between bottom and top.
 
-**System 32.** The row runs every 32 mm between the bottom and the top panel and is
-centred there: `Loch_K = FLOOR((Innen_H − 2·Rand_Min)/Raster, 1) + 1` holes, the
-first at `Z_Erst = Innen_Unten + (Innen_H − (Loch_K − 1)·Raster)/2`. The first and
-the last hole are therefore the same distance from the panels (Hettich's advice, so
-the sides can be swapped left/right); `Rand_Min` (32 mm) is the smallest distance,
-the distance is at most one raster step larger. Source: Hettich, Ratgeber
-Möbeltechnik (Ø5, 32 mm, 37 mm from the front edge; equal first/last distance); the
-exact distance to the panels is not fixed by the standard and is an option. Front
-row at `Reihe_V` (37 mm), back row at a multiple of 32 mm
-behind it (`Reihe_H`), so mounting plates and runners fit. Diameter and depth are
-options (Ø5 × 12 mm by default; the values differ between hardware makers, so none
-is hard-coded). The cutter boxes stick out of the inner face by 1 mm so they clearly
-cross it.
+**System 32.** The row runs every 32 mm (`Raster`) between the bottom and the top
+panel and is centred there: `Holes_K = FLOOR((In_H − 2·Edge_Min)/Raster, 1) + 1`
+holes, the first at `Z_First = In_Low + (In_H − (Holes_K − 1)·Raster)/2`. The first
+and the last hole are therefore the same distance from the panels (Hettich's advice,
+so the sides can be swapped left/right); `Edge_Min` (32 mm) is the smallest
+distance, and the distance is at most one raster step larger. Source: Hettich,
+Ratgeber Möbeltechnik (Ø5, 32 mm, 37 mm from the front edge; equal first/last
+distance). The exact distance to the panels is not fixed by the standard and is an
+option. Front row at `Row_Front` (37 mm), back row at a multiple of 32 mm behind it
+(`Row_Back`), so mounting plates and runners fit. Diameter and depth are options
+(Ø5 × 12 mm by default; the values differ between hardware makers, so none is
+hard-coded). The cutter boxes stick out of the inner face by 1 mm so they clearly
+cross it. A cutter's `Copies` is `Holes_K − 1`; its Z is
+`Z_First + Copy·Raster − Hole_D/2`.
 
 **Shelves.** With n shelves the gap is `(H − n·t)/(n+1)`; keeping it within
-`[Fach_Min, Fach_Max]` gives `n ≥ (H − max)/(max + t)` and `n ≤ (H − min)/(min + t)`.
+`[Gap_Min, Gap_Max]` gives `n ≥ (H − max)/(max + t)` and `n ≤ (H − min)/(min + t)`.
 Automatic mode takes the smallest n. Shelves always sit on the hole raster
-(`ROUND((ideal − Traeger − Z_Erst)/Raster)`), which moves a gap by up to ±16 mm; a
+(`ROUND((Ideal − Support − Z_First)/Raster)`), which moves a gap by up to ±16 mm; a
 formula cannot take a minimum over copies, so n is chosen with limits narrowed by
 half a raster and the snapped gaps stay within the user's limits. A `warn`
 attribute reports when no n fits (or, in fixed mode, when the gap is outside the
-limits). `Traeger` is the shelf-support offset from hole centre to shelf underside.
+limits). `Support` is the shelf-support offset from hole centre to shelf underside.
+
+**Dividers.** `Divs = MAX(0, CEILING(LenX/Split, 1) − 1)`: one divider for every
+started `Split` (1000 mm) of width, spread evenly (`Field_W` is the clear width of a
+compartment). Every compartment gets the same shelves: the shelf's `Copies` is
+`N·Fields − 1`, with `Level = FLOOR(Copy/Fields, 1)` and `MOD(Copy, Fields)` as the
+compartment (the "2D grid from one `Copy`" of the `MOD` function). Dividers are
+drilled right through in the same rows (two blind holes of the sides' depth would
+meet inside a 19 mm board); their cutters have `Copies = Holes_K·Divs − 1`.
 
 **Back panel groove.** The back panel sits in a groove in both sides, the bottom and
-the top (`board@1`, four cutters): `Rueck_Abstand` (10 mm) from the rear edge,
-`Nut_T` (8 mm) deep, `Rueck_Dicke + 1 mm` wide, so the panel has 0.5 mm play at the
-sides. The panel goes `Nut_T − 1 mm` into each groove. Bottom and top run to the
-rear edge; shelves, dividers and the back hole row stop in front of the groove
-(`Rueck_Y`). Without a back panel the cutters are off.
+the top (`board@1`, four cutters): `Back_Inset` (10 mm) from the rear edge,
+`Groove_D` (8 mm) deep, `Back_Thick + 1 mm` wide (`Groove_W`), so the panel has
+0.5 mm play at the sides. The panel goes `Groove_D − 1 mm` into each groove. Bottom
+and top run to the rear edge; shelves, dividers and the back hole row stop in front
+of the groove (`Back_Y`). Without a back panel the cutters are off.
 
-Not in this template yet: construction holes for connectors (Ø8/Ø15), hinge cups
-(Ø35 on doors).
+Not in the model yet: construction holes for connectors (Ø8/Ø15), hinge cups
+(Ø35 on doors), a groove in the dividers.
 
 ## 16. Translations
 
@@ -451,8 +464,9 @@ English is the source and the key, like the host: `locale/<lang>.json` holds fla
   also carries its template and parameters. The UI translates them with
   `tr_msg()`; nested messages ("Copy 3: Division by zero") translate part by part.
 - What the user typed (labels, option names, part names in a document) is content
-  and is never translated. The cabinet template writes its labels in the language
-  active when it is inserted.
+  and is never translated. The cabinet model's `build.py` writes its labels in the
+  language given to it (`labels.json` holds German, Spanish and French), so they are
+  document content from then on.
 - A test checks that every catalog has an entry for every `tr`/`N_`/`Msg` string in
   the code, with the same `{placeholders}`.
 

@@ -1,0 +1,35 @@
+# Catalog entry for the IngeTrazo extension library.
+# Copy to extensions/dynamic_components.toml in the ingetrazo-extensions repository
+# when listing a release (see AGENTS.md, "Releasing"). Fill in the TODO line.
+
+id = "dynamic_components"
+version = "0.1.0"
+author = "Tristan Cebulla"
+author_url = "https://github.com/d1rty-pixel"
+
+license = "GPL-3.0-or-later"
+
+repository = "https://github.com/d1rty-pixel/ingetrazo-dynamic-components"
+
+# The release asset built by scripts/package.py, under the release's tag.
+download = "https://github.com/d1rty-pixel/ingetrazo-dynamic-components/releases/download/v0.1.0/dynamic_components-0.1.0.zip"
+# sha256sum dist/dynamic_components-0.1.0.zip (of the exact file you uploaded)
+sha256 = "TODO"
+
+ingetrazo = "0.6.0"
+
+tags = ["productivity", "fabrication", "architecture"]
+# screenshot = "dynamic_components.png"   # in screenshots/ of the catalog repository
+
+[name]
+es = "Componentes dinámicos"
+en = "Dynamic Components"
+pt = "Componentes dinâmicos"
+
+[summary]
+es = "Componentes con atributos y fórmulas al estilo de SketchUp: tamaño, posición, visibilidad y repetición de las piezas, con agujeros y ranuras reales. Se comparten en el .igz."
+en = "SketchUp-style dynamic components: attributes and formulas drive the size, position, visibility and repetition of a component's parts, with real holes and grooves. Shared in the .igz."
+pt = "Componentes dinâmicos ao estilo do SketchUp: atributos e fórmulas controlam tamanho, posição, visibilidade e repetição das peças, com furos e rasgos reais. Compartilhados no .igz."
+
+[description]
+en = "Gives a component attributes and formulas (=IF(…), Parent!LenX, COPY) that lay out its parts: scale a cabinet and it recounts its shelves, set a spacing and a fence adds its posts. The options appear in a panel; every change is one undo step. Generated boards get real round holes, pockets and grooves from cutter parts, so holes stay round and keep their spacing when the component grows. The definition is saved in the .igz and travels with the component when it is copied into another document. Formulas run in an interpreter of their own; a document never runs code. Includes an example model: a cabinet with System 32 hole rows. German, Spanish and French."

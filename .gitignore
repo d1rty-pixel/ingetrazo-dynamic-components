@@ -4,3 +4,4 @@ ingetrazo-source
 __pycache__/
 *.pyc
 *.igz.bak
+dist/

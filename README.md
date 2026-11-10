@@ -1,152 +1,81 @@
-# ingetrazo-dynamic-components
+# Dynamic Components for IngeTrazo
 
-An [IngeTrazo](https://ingetrazo.com) extension that adds SketchUp-style dynamic
-components: attributes and formulas that drive the size, position, visibility,
-material and repetition of a component's parts.
+[![Licence](https://img.shields.io/github/license/d1rty-pixel/ingetrazo-dynamic-components)](LICENSE)
+![IngeTrazo](https://img.shields.io/badge/IngeTrazo-0.6.0%2B-blue)
+![Extension API](https://img.shields.io/badge/Extension%20API-2-blue)
+![Python](https://img.shields.io/badge/Python-3.12-informational)
+[![Windows: tested](https://img.shields.io/badge/Windows-tested-success)](#platform-status)
+[![Linux: test suite only](https://img.shields.io/badge/Linux-test%20suite%20only-yellow)](#platform-status)
+[![macOS: not tested](https://img.shields.io/badge/macOS-not%20tested-lightgrey)](#platform-status)
 
-Status: early development. Requires IngeTrazo 0.6.0 (Extension API 2).
+Dynamic Components is an extension for the 3D modeller [IngeTrazo](https://github.com/ingelibre/ingetrazo). It picks up the idea of SketchUp's dynamic components: a component gets attributes and formulas that drive the size, position, rotation, visibility, material and repetition of its parts, so a cabinet that you stretch lays out its own shelves, a fence adds its own posts, and the options appear in a panel instead of in the model.
 
-## Install
+## What it can do
 
-`./install.sh` copies the package into IngeTrazo's plugins folder (on WSL it finds
-the Windows one, `%APPDATA%\IngeTrazo\plugins`) and keeps the previous copy as
-`.dynamic_components.bak`. IngeTrazo does not follow the repository, so run it
-after every change and restart IngeTrazo. By hand:
+- **Attributes and formulas:** SketchUp-style formulas (`=IF(Width > 1, 2, 1)`, `Parent!LenX`, `Part!Attr`, `COPY`) on a component and its parts, in a small interpreter of its own (no `eval`).
+- **Options:** the values users may change, in sections, with *show if* conditions and warnings; every change is one undo step.
+- **Repetition:** `Copies` makes a part repeat; a grid of copies from one index (`MOD`).
+- **Scaling:** scaling an instance with the Scale tool feeds its size attributes; parts keep their thickness while you drag.
+- **Real holes and grooves:** generated boards with round holes, pockets and grooves, cut by *cutter* parts, so holes stay round and keep their spacing when the component grows.
+- **Sharing:** the definition is saved in the `.igz` and travels with a component when you copy it into another document.
+- **Bake:** freezes an instance into plain geometry.
+- **Languages:** the panel follows IngeTrazo's language: English, German, Spanish, French.
 
-Copy or symlink the `dynamic_components` package (the folder, not the repository)
-into the IngeTrazo plugins folder, then restart IngeTrazo:
+Not yet included: nested dynamic components, importing SketchUp's dynamic attributes from `.skp`, notches over a corner. All limits are listed in the [manual](docs/manual.md#limits) and in [known issues](docs/known-issues.md).
 
-- Linux: `~/.local/share/ingetrazo/plugins/` (honours `$XDG_DATA_HOME`)
-- Linux, Flatpak: `~/.var/app/com.ingetrazo.IngeTrazo/data/ingetrazo/plugins/`
-- Windows: `%APPDATA%\ingetrazo\plugins\`
+## Quick start
 
-```
-ln -s "$PWD/dynamic_components" ~/.local/share/ingetrazo/plugins/dynamic_components
-```
+1. Install the extension, see [Installation](#installation) below, and restart IngeTrazo.
+2. Open [`models/system32-cabinet/system32-cabinet.igz`](models/system32-cabinet/README.md) and select the cabinet.
+3. Open the **Dynamic Components** tab of the side tray (Window → Panels, closed by default) and change the width, the height or the shelves. Or scale the cabinet with the Scale tool.
+4. To make your own: right-click a component instance → **Make Dynamic**, then see the [manual](docs/manual.md).
 
-**Extensions > Open plugins folder** in IngeTrazo creates and opens the folder.
+## Installation
 
-## Use
+The extension needs IngeTrazo 0.6.0 or later. It needs nothing else: no runtime, no extra packages.
 
-Right-click a component instance: **Make Dynamic**. Everything else is in the
-**Dynamic Components** tab of the side tray (closed by default, see Window >
-Panels), for the selected instance:
+**From the extension library.** In IngeTrazo open **Extensions → Manage extensions…**, search for **Dynamic Components** on the **Browse** tab, press **Download** and restart IngeTrazo. *Dynamic Components is not listed in the library yet; until it is, install it by hand.*
 
-- **Options**: the values users may change; each change is one undo step, ↺ goes
-  back to the default. **Component Options…** in the context menu opens this.
-- **Bake** freezes the instance as it is now into a plain component. Cutters and
-  hidden parts are removed.
-- One section per part: click an attribute to edit its label, type, formula
-  (insert menu and completion for references and functions, checked live), who
-  may see or edit it, limits and choices. A change is applied when you leave
-  the field (Tab moves on), for every instance of the definition; one undo step
-  each.
+**By hand.** Download `dynamic_components-<version>.zip` from the [releases](https://github.com/d1rty-pixel/ingetrazo-dynamic-components/releases) and unpack it into IngeTrazo's plugin folder, so that `…/plugins/dynamic_components/__init__.py` exists, then restart IngeTrazo:
 
-Scaling an instance with the Scale tool lays its parts out live while you drag
-(boards keep their thickness) and stores the new size on release.
+| Installation | Plugin folder |
+|---|---|
+| Windows | `%APPDATA%\IngeTrazo\plugins\` |
+| Linux | `~/.local/share/ingetrazo/plugins/` |
+| Linux, Flatpak | `~/.var/app/com.ingetrazo.IngeTrazo/data/ingetrazo/plugins/` |
 
-A group cannot be made *inside* a component (IngeTrazo keeps a component's parts
-as they are). Make it outside, right-click it and choose **Add to Dynamic
-Component…**: a small dialog lists the dynamic components that can take it, and
-the group keeps its place in the model (one undo step). A group already sitting
-in a dynamic component without being a part offers **Add as Part of “…”** in the
-context menu and **Add as part** in the tab.
+**Extensions → Open plugins folder** in IngeTrazo creates and opens it. From a checkout, `scripts/install-local.sh` copies the package there. Updating, uninstalling and checking that it works: [docs/installation.md](docs/installation.md).
 
-While a dynamic component is open for editing (double-click into it), the tab
-shows it read-only; leave it to change options or attributes. A part deleted
-inside it disappears from the tab, which offers **Remove from definition**.
-Parts always follow the definition: a part moved by hand inside the component
-goes back to where its attributes put it.
+## Platform status
 
-### Options layout
+| Platform | Status |
+|---|---|
+| Windows (IngeTrazo installer) | tested by hand; test suite |
+| Linux | test suite (offscreen, no GUI run by hand) |
+| macOS | not tested |
 
-An attribute can name a **section** (options with the same section are shown
-together under that heading) and a **Show if** formula (the option is shown only
-while it is true, e.g. `=Plinth` or `=Shelf_Mode="fixed"`). The access **Shown as a
-warning** makes a computed text appear as a warning while it is not empty.
+## Example models
 
-### Generated parts and cutters (real holes)
+| Model | What it shows |
+|---|---|
+| [`models/system32-cabinet/`](models/system32-cabinet/README.md) | A cabinet with plinth, automatic shelves, dividers above 1000 mm, a back panel in a groove and System 32 hole rows. Made of what the interface offers; nothing in the extension is specific to it. |
 
-Each part's section starts with **Geometry** and **Cuts into**:
+## Documentation
 
-- **Geometry: Board with holes, pockets and grooves** (`board@1`): the part is no longer
-  stretched; its mesh is built at its size (`LenX/Y/Z`), so holes stay round and
-  keep their spacing when the component grows. It can also take a
-  **groove**: a box cutter that runs along the whole length of the board from one
-  face (all grooves of a board the same way, and it must stay clear of the board's
-  sides across it).
-- **Cuts into: a part**: this part becomes a *cutter*. It is never drawn; its box
-  is cut out of that part where they meet (a cylinder makes a round hole, a box a
-  rectangular pocket or opening). Its position, `Copies` and `Hidden` (= cut off)
-  come from formulas as usual. A cut must enter through one face (or go through
-  two opposite ones) and stay inside it; it may also run the whole length of the
-  board (a groove). Notches over a corner are not possible.
+| Document | Content |
+|---|---|
+| [docs/installation.md](docs/installation.md) | Installing the extension: extension library, manual per platform, release zip, update, verification |
+| [docs/manual.md](docs/manual.md) | How to use every function: attributes, formulas, options, generated parts, sharing, limits |
+| [docs/faq.md](docs/faq.md) | Frequently asked questions |
+| [docs/known-issues.md](docs/known-issues.md) | Known limits and open points |
+| [docs/sketchup-functions.md](docs/sketchup-functions.md) | SketchUp's formula functions against ours |
+| [docs/DESIGN.md](docs/DESIGN.md) | Design: how it works and why |
+| [docs/contract.md](docs/contract.md) | Module interfaces (binding for development) |
+| [models/system32-cabinet/README.md](models/system32-cabinet/README.md) | The example model |
+| [scripts/README.md](scripts/README.md) | Helper scripts: install, package |
+| [CHANGELOG.md](CHANGELOG.md) | What changed, per release |
+| [AGENTS.md](AGENTS.md) | Development setup, tests and conventions |
 
-The holes are ordinary geometry, saved in the file and exported. Problems (a
-cutter that reaches nothing, a cut over an edge) are listed in the part's section.
-A generated part edited by hand is left alone: the tab says so and offers
-**Regenerate** (the edits are lost). While you drag the Scale tool, generated
-parts are stretched; they are rebuilt when you release. **Bake** keeps the holes
-and removes the cutters.
+## Licence
 
-### Ready-made models
-
-Dynamic components are shared as `.igz` files: open one, or copy a component from
-it into another document (it carries its definition). `models/` holds examples,
-each in its own folder with a README. The extension contains nothing specific to
-any one of them.
-
-**System 32 cabinet** (`models/system32-cabinet/`): a carcass with sides, bottom,
-top, back panel, a plinth that can be turned off, shelves and four rows of System 32 holes (Ø5 × 12 mm, every 32 mm from the
-centred between bottom and top panel, front row 37 mm from the front edge, back row at a
-multiple of 32 mm behind it; all values are options). In *From the height* mode
-the number of shelves follows the height so that every gap stays between the
-smallest and largest gap; shelves always sit on the hole raster. Wider than
-1000 mm (an option) it gets a divider for every started 1000 mm, drilled through,
-with the same shelves in every compartment. A warning appears when
-the limits cannot both be kept.
-
-### Language
-
-The tab follows IngeTrazo's interface language. German, Spanish and French are
-included; English is the source and the fallback (any other language, and any
-string a catalog lacks, shows in English);
-another language is one file, `dynamic_components/locale/<code>.json`
-(`{"English text": "translation"}`). Labels you type into a definition are yours
-and are not translated.
-
-## Status and known limits
-
-Implemented: SketchUp-style formulas (`=IF(…)`, `Parent!LenX`, `Part!Attr`),
-attributes on the component and its direct parts, `X/Y/Z`, `RotX/Y/Z`,
-`LenX/Y/Z`, `Hidden`, `Material`, `Copies`/`COPY`, options and attribute editor
-in one side-tray tab, scaling an instance feeds `LenX/Y/Z` (live layout while
-dragging), adding moved-in groups as parts, undo for every step, .igz round
-trip, bake, option sections / show-if / warnings, `MOD`, generated boards with
-real holes (`board@1`) and cutters, German,
-Spanish and French.
-
-Not yet, or unverified:
-
-- A pasted or imported instance carries a copy of its definition and keeps
-  working in another document. If that document already has a *different*
-  definition under the same id, the document's own one wins.
-- Scaling an instance and the move of that scale into `LenX/Y/Z` are two undo steps.
-- Only one level of parts; nested dynamic components are not evaluated.
-- Rotation order (`RotZ·RotY·RotX`) and `Copies` semantics (N extra copies) follow
-  SketchUp from memory and are not verified against real files.
-- No `.skp` import of SketchUp dynamic attributes yet (see `docs/DESIGN.md`).
-- Interplay with Newton's "keep pose" is not handled yet.
-- Translations: German, Spanish and French only (everything else in English).
-- Generated boards: holes and pockets inside a face, and grooves along a whole board (no notches
-  over an edge, no rotated cutters); construction holes and hinge cups are not in
-  the cabinet template yet.
-
-## Tests
-
-`.venv` and `ingetrazo-source` are symlinks to a host IngeTrazo checkout (see
-`CLAUDE.md`).
-
-```
-.venv/bin/python -m pytest tests -q
-```
+GNU General Public License v3.0 or later, like IngeTrazo. See [LICENSE](LICENSE).

@@ -4,14 +4,14 @@
 # IngeTrazo does not follow the repository: whatever sits in its plugins folder
 # is what runs, so run this after every change, then restart IngeTrazo.
 #
-#   ./install.sh [plugins-dir]
+#   scripts/install-local.sh [plugins-dir]
 #
 # Without an argument it picks the plugins folder of IngeTrazo for Windows when
 # run from WSL (%APPDATA%\IngeTrazo\plugins), else the Linux one. The previous
 # copy is kept as .dynamic_components.bak next to it.
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [ $# -ge 1 ]; then
     plugins="$1"
