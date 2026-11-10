@@ -1,6 +1,6 @@
 # Catalog entry for the IngeTrazo extension library.
 # Copy to extensions/dynamic_components.toml in the ingetrazo-extensions repository
-# when listing a release (see AGENTS.md, "Releasing"). Fill in the TODO line.
+# when listing a release (see AGENTS.md, "Releasing").
 
 id = "dynamic_components"
 version = "0.1.0"
@@ -14,7 +14,7 @@ repository = "https://github.com/d1rty-pixel/ingetrazo-dynamic-components"
 # The release asset built by scripts/package.py, under the release's tag.
 download = "https://github.com/d1rty-pixel/ingetrazo-dynamic-components/releases/download/v0.1.0/dynamic_components-0.1.0.zip"
 # sha256sum dist/dynamic_components-0.1.0.zip (of the exact file you uploaded)
-sha256 = "TODO"
+sha256 = "7d4489d0494c9d27dea33a4e0ccf70220bde000254180debbb01817dd75f60ae"
 
 ingetrazo = "0.6.0"
 
