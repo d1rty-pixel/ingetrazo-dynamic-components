@@ -19,7 +19,7 @@ sha256 = "TODO"
 ingetrazo = "0.6.0"
 
 tags = ["productivity", "fabrication", "architecture"]
-# screenshot = "dynamic_components.png"   # in screenshots/ of the catalog repository
+screenshot = "dynamic-components.png"   # the file goes into screenshots/ of the catalog repository
 
 [name]
 es = "Componentes dinámicos"
